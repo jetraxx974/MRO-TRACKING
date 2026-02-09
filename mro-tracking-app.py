@@ -234,69 +234,70 @@ def run_mro_app():
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
 
     # --- ONGLET 2 : PLANIFICATION (Connecté à Jobs_Table) ---
-   # --- DANS L'ONGLET PLANIFICATION ---
-with tab_plan:
-    col_form, col_list = st.columns([1, 1.5])
-    
-    with col_form:
-        st.subheader("🚀 Créer un nouveau rapport")
-        with st.form("new_job_form"):
-            job_name = st.text_input("Nom du rapport (ex: Suivi Hebdo)")
-            recipients = st.text_input("Emails des destinataires (séparés par des virgules)")
-            freq = st.selectbox("Fréquence", ["Quotidien", "Hebdomadaire", "Mensuel"])
-            send_time = st.time_input("Heure d'envoi", value=time(8, 0))
-            fmt = st.selectbox("Format du fichier", ["Excel (.xlsx)", "CSV"])
-            
-            submit = st.form_submit_button("💾 Enregistrer la planification")
-            
-            if submit:
-                if job_name and recipients:
-                    # On prépare l'objet pour Supabase
-                    new_job = {
-                        "task_name": job_name,
-                        "recipient": recipients,
-                        "frequency": freq,
-                        "hour": str(send_time),
-                        "format": fmt,
-                        "owner_email": st.session_state['user_email'], # LIEN CRUCIAL
-                        "filters_config": st.session_state.get('active_filters', {}),
-                        "active": False # Désactivé par défaut
-                    }
-                    if add_job(new_job):
-                        st.success("Rapport ajouté à votre liste !")
-                        st.rerun()
-
-    with col_list:
-        st.subheader("📋 Mes rapports programmés")
-        # On charge UNIQUEMENT les jobs de l'utilisateur
-        my_jobs = load_jobs(st.session_state['user_email'])
+    with tab_plan:
+        col_form, col_list = st.columns([1, 1.5])
         
-        if not my_jobs:
-            st.info("Vous n'avez pas encore de rapports planifiés.")
-        else:
-            for job in my_jobs:
-                # Design de la carte selon l'état Actif/Inactif
-                status_color = "#2ecc71" if job['active'] else "#95a5a6"
+        with col_form:
+            st.subheader("🚀 Créer un nouveau rapport")
+            with st.form("new_job_form"):
+                job_name = st.text_input("Nom du rapport (ex: Suivi Hebdo)")
+                recipients = st.text_input("Emails des destinataires (séparés par des virgules)")
+                freq = st.selectbox("Fréquence", ["Quotidien", "Hebdomadaire", "Mensuel"])
+                send_time = st.time_input("Heure d'envoi", value=time(8, 0))
+                fmt = st.selectbox("Format du fichier", ["Excel (.xlsx)", "CSV"])
                 
-                with st.container():
-                    # On affiche chaque job dans une "box"
-                    st.markdown(f"""
-                    <div style="border-left: 5px solid {status_color}; padding:10px; background:#f9f9f9; margin-bottom:10px; border-radius:5px">
-                        <b>{job['task_name']}</b> | 🔄 {job['frequency']} à {job['hour']}<br>
-                        <small>📧 Dest: {job['recipient']}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
+                submit = st.form_submit_button("💾 Enregistrer la planification")
+                
+                if submit:
+                    if job_name and recipients:
+                        # On prépare l'objet pour Supabase
+                        new_job = {
+                            "task_name": job_name,
+                            "recipient": recipients,
+                            "frequency": freq,
+                            "hour": str(send_time),
+                            "format": fmt,
+                            "owner_email": st.session_state['user_email'], # LIEN CRUCIAL
+                            "filters_config": st.session_state.get('active_filters', {}),
+                            "active": False # Désactivé par défaut
+                        }
+                        if add_job(new_job):
+                            st.success("Rapport ajouté à votre liste !")
+                            st.rerun()
+                    else:
+                        st.error("Champs manquants")
+
+        with col_list:
+            st.subheader("📋 Mes rapports programmés")
+            # On charge UNIQUEMENT les jobs de l'utilisateur
+            my_jobs = load_jobs(st.session_state['user_email'])
+            
+            if not my_jobs:
+                st.info("Vous n'avez pas encore de rapports planifiés.")
+            else:
+                for job in my_jobs:
+                    # Design de la carte selon l'état Actif/Inactif
+                    status_color = "#2ecc71" if job['active'] else "#95a5a6"
                     
-                    # Boutons d'action pour CHAQUE job
-                    c1, c2, c3 = st.columns([1, 1, 2])
-                    if c1.button("🗑️ Supprimer", key=f"del_{job['id']}"):
-                        supabase.table("jobs_table").delete().eq("id", job['id']).execute()
-                        st.rerun()
+                    with st.container():
+                        # On affiche chaque job dans une "box"
+                        st.markdown(f"""
+                        <div style="border-left: 5px solid {status_color}; padding:10px; background:#f9f9f9; margin-bottom:10px; border-radius:5px">
+                            <b>{job['task_name']}</b> | 🔄 {job['frequency']} à {job['hour']}<br>
+                            <small>📧 Dest: {job['recipient']}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
-                    btn_label = "⏸️ Désactiver" if job['active'] else "▶️ Activer"
-                    if c2.button(btn_label, key=f"tog_{job['id']}"):
-                        supabase.table("jobs_table").update({"active": not job['active']}).eq("id", job['id']).execute()
-                        st.rerun()
+                        # Boutons d'action pour CHAQUE job
+                        c1, c2, c3 = st.columns([1, 1, 2])
+                        if c1.button("🗑️ Supprimer", key=f"del_{job['id']}"):
+                            supabase.table("jobs_table").delete().eq("id", job['id']).execute()
+                            st.rerun()
+                            
+                        btn_label = "⏸️ Désactiver" if job['active'] else "▶️ Activer"
+                        if c2.button(btn_label, key=f"tog_{job['id']}"):
+                            supabase.table("jobs_table").update({"active": not job['active']}).eq("id", job['id']).execute()
+                            st.rerun()
 
 # =============================================================================
 # POINT D'ENTRÉE & LOGIN
