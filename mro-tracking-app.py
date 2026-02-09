@@ -302,31 +302,36 @@ def run_mro_app():
 # SAVE IMPORTED DATA
 # =============================================================================
 def save_imported_data(df, user_email):
-    """Sauvegarde massive par paquets avec conversion des dates pour le JSON"""
+    """Sauvegarde massive : gère les dates ET les valeurs NaN/vides"""
     try:
         # 1. On vide les anciennes données
         supabase.table("raw_data_table").delete().eq("owner_email", user_email).execute()
         
-        # --- MODIFICATION ICI : On convertit les Timestamps en String ---
+        # 2. Nettoyage et conversion
         df_save = df.copy()
+        
+        # Conversion des dates en texte
         for col in df_save.columns:
-            # Si la colonne contient des dates, on les transforme en texte ISO
             if pd.api.types.is_datetime64_any_dtype(df_save[col]):
                 df_save[col] = df_save[col].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # 2. Préparation des données (on utilise le DataFrame converti)
+        # REMPLACEMENT DES NaN PAR None (pour être compatible JSON null)
+        # C'est cette ligne qui corrige ton erreur actuelle
+        df_save = df_save.where(pd.notnull(df_save), None)
+        
+        # 3. Préparation des dictionnaires
         all_rows = [{"owner_email": user_email, "row_data": row} for row in df_save.to_dict(orient='records')]
         
-        # 3. Envoi par morceaux (Chunks)
+        # 4. Envoi par paquets de 5000
         chunk_size = 5000
         total = len(all_rows)
-        progress_bar = st.progress(0, text="Synchronisation avec Supabase...")
+        progress_bar = st.progress(0, text="Synchronisation massive...")
         
         for i in range(0, total, chunk_size):
             chunk = all_rows[i : i + chunk_size]
             supabase.table("raw_data_table").insert(chunk).execute()
             pct = min((i + chunk_size) / total, 1.0)
-            progress_bar.progress(pct, text=f"Sauvegarde en cours : {int(pct*100)}%")
+            progress_bar.progress(pct, text=f"Envoi des données : {int(pct*100)}%")
             
         progress_bar.empty()
         return True
