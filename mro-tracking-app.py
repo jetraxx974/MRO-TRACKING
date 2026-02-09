@@ -258,7 +258,7 @@ def run_mro_app():
                     else: 
                         st.error("Veuillez remplir le nom, les emails et choisir au moins un jour.")
 
-with col_list:
+    with col_list:
             st.subheader("📋 Mes rapports programmés")
             my_jobs = load_jobs(st.session_state['user_email'])
             
