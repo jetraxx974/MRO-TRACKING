@@ -263,52 +263,40 @@ def run_mro_app():
             my_jobs = load_jobs(st.session_state['user_email'])
             
             if not my_jobs:
-                st.info("Aucun rapport planifié pour le moment.")
+                st.info("Aucun rapport planifié.")
             else:
                 for job in my_jobs:
-                    # Conversion forcée de l'ID pour Supabase (évite les bugs de type)
                     target_id = int(job['id'])
-                    
-                    # Bordure dynamique : vert si actif, orange sinon
                     border_class = "border-active" if job['active'] else ""
-                    icon_status = "🟢 Actif" if job['active'] else "🟠 Inactif"
                     
                     with st.container():
                         st.markdown(f"""
                         <div class="job-card {border_class}">
-                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                                <strong style="font-size:1.1em;">{job['task_name']}</strong>
-                                <span>{icon_status}</span>
-                            </div>
-                            <div class="small-text">
-                                📅 <b>{job['frequency']}</b> à {job['hour']}<br>
-                                📧 {job['recipient']} | 📁 {job['format']}
-                            </div>
+                            <strong style="font-size:1.1em;">{job['task_name']}</strong><br>
+                            <small>📅 {job['frequency']} | 📧 {job['recipient']}</small>
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        c1, c2, c3 = st.columns([1, 1, 2])
+                        c1, c2, c3 = st.columns([1, 1, 1])
                         
-                        # --- FIX SUPPRESSION ---
-                        if c1.button("🗑️ Supprimer", key=f"del_{target_id}"):
-                            try:
-                                supabase.table("jobs_table").delete().eq("id", target_id).execute()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erreur : {e}")
+                        # --- BOUTON SUPPRIMER AVEC RETOUR D'ERREUR ---
+                        if c1.button("🗑️ Supprimer", key=f"del_btn_{target_id}"):
+                            # On tente la suppression et on capture le résultat
+                            res = supabase.table("jobs_table").delete().eq("id", target_id).execute()
                             
-                        # --- FIX ACTIVATION ---
-                        label = "⏸️ Stop" if job['active'] else "▶️ Activer"
-                        if c2.button(label, key=f"tog_{target_id}"):
-                            try:
-                                supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
+                            # Si Supabase a supprimé quelque chose, res.data contiendra la ligne supprimée
+                            if res.data:
+                                st.success("Supprimé !")
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"Erreur : {e}")
+                            else:
+                                # Si res.data est vide, c'est que rien n'a été trouvé ou supprimé
+                                st.error(f"Impossible de supprimer l'ID {target_id}. Vérifiez les Policies Supabase.")
                         
-                        with c3.expander("🔍 Voir Filtres"):
-                            st.json(job['filters_config'])
-
+                        # --- BOUTON ACTIVER ---
+                        btn_label = "⏸️ Stop" if job['active'] else "▶️ Activer"
+                        if c2.button(btn_label, key=f"tog_btn_{target_id}"):
+                            supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
+                            st.rerun()
 # =============================================================================
 # SAVE IMPORTED DATA
 # =============================================================================
