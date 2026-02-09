@@ -302,25 +302,31 @@ def run_mro_app():
 # SAVE IMPORTED DATA
 # =============================================================================
 def save_imported_data(df, user_email):
-    """Sauvegarde massive par paquets de 5000 lignes"""
+    """Sauvegarde massive par paquets avec conversion des dates pour le JSON"""
     try:
-        # 1. On vide les anciennes données de cet utilisateur pour repartir à propre
+        # 1. On vide les anciennes données
         supabase.table("raw_data_table").delete().eq("owner_email", user_email).execute()
         
-        # 2. Préparation des données
-        all_rows = [{"owner_email": user_email, "row_data": row} for row in df.to_dict(orient='records')]
+        # --- MODIFICATION ICI : On convertit les Timestamps en String ---
+        df_save = df.copy()
+        for col in df_save.columns:
+            # Si la colonne contient des dates, on les transforme en texte ISO
+            if pd.api.types.is_datetime64_any_dtype(df_save[col]):
+                df_save[col] = df_save[col].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # 3. Envoi par morceaux (Chunks) pour éviter les Timeouts
+        # 2. Préparation des données (on utilise le DataFrame converti)
+        all_rows = [{"owner_email": user_email, "row_data": row} for row in df_save.to_dict(orient='records')]
+        
+        # 3. Envoi par morceaux (Chunks)
         chunk_size = 5000
         total = len(all_rows)
-        progress_bar = st.progress(0, text="Sauvegarde dans la base de données...")
+        progress_bar = st.progress(0, text="Synchronisation avec Supabase...")
         
         for i in range(0, total, chunk_size):
             chunk = all_rows[i : i + chunk_size]
             supabase.table("raw_data_table").insert(chunk).execute()
-            # Mise à jour de la barre
             pct = min((i + chunk_size) / total, 1.0)
-            progress_bar.progress(pct, text=f"Sauvegarde : {int(pct*100)}%")
+            progress_bar.progress(pct, text=f"Sauvegarde en cours : {int(pct*100)}%")
             
         progress_bar.empty()
         return True
