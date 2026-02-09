@@ -21,22 +21,21 @@ st.markdown("""
 <style>
     .block-container {padding-top: 1rem;}
     
-    /* STYLE DES CARTES : FOND TRANSPARENT + BORDURE ORANGE PALE */
+    /* CARTE TRANSPARENTE / BORDURE ORANGE PALE */
     .job-card {
         padding: 15px; 
         border-radius: 10px; 
         margin-bottom: 10px; 
-        background-color: transparent; 
-        border: 2px solid #ffcc80; /* Orange pâle par défaut */
+        background-color: transparent !important; 
+        border: 2px solid #FFCC80; 
     }
     
-    /* BORDURE VERTE SI ACTIF */
+    /* BORDURE VERTE POUR LES ACTIFS */
     .border-active {
-        border-color: #2ecc71 !important;
+        border: 2px solid #2ECC71 !important;
     }
 
-    .small-text {font-size: 0.85rem; opacity: 0.8;}
-    .stButton button {width: 100%;}
+    .small-text {font-size: 0.85rem; opacity: 0.9;}
 </style>
 """, unsafe_allow_html=True)
 # =============================================================================
@@ -188,94 +187,96 @@ def run_mro_app():
         st.session_state['active_filters'] = current_filters_config
 
    # --- ONGLET 2 : PLANIFICATION ---
-with tab_plan:
-    col_form, col_list = st.columns([1, 1.5])
-    
-    with col_form:
-        st.subheader("🚀 Nouveau Rapport")
-        with st.form("new_job_form"):
-            job_name = st.text_input("Nom du rapport")
-            recipients = st.text_input("Destinataires (séparés par des virgules)")
-            
-            # --- NOUVELLE LOGIQUE DE FRÉQUENCE ---
-            st.write("**Fréquence d'envoi**")
-            
-            # Cases à cocher multiples pour les jours
-            selected_days = st.multiselect(
-                "Jours de la semaine", 
-                ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"],
-                default=["Lundi"]
-            )
-            
-            # Dropdown pour la précision des semaines
-            recurrence = st.selectbox(
-                "Intervalle", 
-                ["Toutes les semaines", "Toutes les 2 semaines", "Toutes les 4 semaines"]
-            )
-            
-            # On combine pour créer une phrase lisible pour la base de données
-            days_str = ", ".join(selected_days)
-            final_frequency_str = f"{days_str} ({recurrence})"
-            
-            send_time = st.time_input("Heure d'envoi", value=time(8, 0))
-            fmt = st.selectbox("Format", ["Excel (.xlsx)", "CSV"])
-            
-            if st.form_submit_button("💾 Enregistrer"):
-                if job_name and recipients and selected_days:
-                    new_job = {
-                        "task_name": job_name,
-                        "recipient": recipients,
-                        "frequency": final_frequency_str,
-                        "hour": str(send_time),
-                        "format": fmt,
-                        "owner_email": st.session_state['user_email'],
-                        "filters_config": st.session_state.get('active_filters', {}),
-                        "active": False
-                    }
-                    if add_job(new_job):
-                        st.success("Planification enregistrée !")
-                        st.rerun()
-                else: 
-                    st.error("Merci de remplir le nom, les destinataires et de choisir au moins un jour.")
-
-    with col_list:
-        st.subheader("📋 Mes rapports programmés")
-        my_jobs = load_jobs(st.session_state['user_email'])
+# --- ONGLET 2 : PLANIFICATION ---
+    with tab_plan:
+        col_form, col_list = st.columns([1, 1.5])
         
-        if not my_jobs:
-            st.info("Aucun rapport planifié pour le moment.")
-        else:
-            for job in my_jobs:
-                # La bordure devient verte uniquement si job['active'] est True
-                border_class = "border-active" if job['active'] else ""
-                icon_status = "🟢 Actif" if job['active'] else "🟠 Inactif"
+        with col_form:
+            st.subheader("🚀 Nouveau Rapport")
+            with st.form("new_job_form"):
+                job_name = st.text_input("Nom du rapport")
+                recipients = st.text_input("Emails des destinataires (séparés par des virgules)")
                 
-                with st.container():
-                    st.markdown(f"""
-                    <div class="job-card {border_class}">
-                        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                            <strong style="font-size:1.1em;">{job['task_name']}</strong>
-                            <span>{icon_status}</span>
-                        </div>
-                        <div class="small-text">
-                            📅 <b>{job['frequency']}</b> à {job['hour']}<br>
-                            📧 {job['recipient']} | 📁 {job['format']}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # --- NOUVELLE LOGIQUE DE FRÉQUENCE ---
+                st.write("**Configuration de l'envoi**")
+                
+                # Cases à cocher pour les jours (on peut en sélectionner plusieurs)
+                selected_days = st.multiselect(
+                    "Jours de la semaine", 
+                    ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"],
+                    default=["Lundi"]
+                )
+                
+                # Précision de la récurrence
+                recurrence = st.selectbox(
+                    "Intervalle", 
+                    ["Toutes les semaines", "Toutes les 2 semaines", "Toutes les 4 semaines"]
+                )
+                
+                # On combine pour la base de données
+                days_str = ", ".join(selected_days)
+                final_frequency_str = f"{days_str} ({recurrence})"
+                
+                send_time = st.time_input("Heure d'envoi", value=time(8, 0))
+                fmt = st.selectbox("Format", ["Excel (.xlsx)", "CSV"])
+                
+                if st.form_submit_button("💾 Enregistrer"):
+                    if job_name and recipients and selected_days:
+                        new_job = {
+                            "task_name": job_name,
+                            "recipient": recipients,
+                            "frequency": final_frequency_str,
+                            "hour": str(send_time),
+                            "format": fmt,
+                            "owner_email": st.session_state['user_email'],
+                            "filters_config": st.session_state.get('active_filters', {}),
+                            "active": False
+                        }
+                        if add_job(new_job):
+                            st.success("Planification enregistrée !")
+                            st.rerun()
+                    else: 
+                        st.error("Veuillez remplir le nom, les emails et choisir au moins un jour.")
+
+        with col_list:
+            st.subheader("📋 Mes rapports programmés")
+            my_jobs = load_jobs(st.session_state['user_email'])
+            
+            if not my_jobs:
+                st.info("Aucun rapport planifié pour le moment.")
+            else:
+                for job in my_jobs:
+                    # Bordure dynamique : vert si actif, orange sinon
+                    border_class = "border-active" if job['active'] else ""
+                    icon_status = "🟢 Actif" if job['active'] else "🟠 Inactif"
                     
-                    c1, c2, c3 = st.columns([1, 1, 2])
-                    if c1.button("🗑️ Supprimer", key=f"del_{job['id']}"):
-                        supabase.table("jobs_table").delete().eq("id", job['id']).execute()
-                        st.rerun()
+                    with st.container():
+                        # Application du style transparent avec bordure
+                        st.markdown(f"""
+                        <div class="job-card {border_class}">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                <strong style="font-size:1.1em;">{job['task_name']}</strong>
+                                <span>{icon_status}</span>
+                            </div>
+                            <div class="small-text">
+                                📅 <b>{job['frequency']}</b> à {job['hour']}<br>
+                                📧 {job['recipient']} | 📁 {job['format']}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
-                    label = "⏸️ Désactiver" if job['active'] else "▶️ Activer"
-                    if c2.button(label, key=f"tog_{job['id']}"):
-                        supabase.table("jobs_table").update({"active": not job['active']}).eq("id", job['id']).execute()
-                        st.rerun()
-                    
-                    with c3.expander("🔍 Voir Filtres"):
-                        st.json(job['filters_config'])
+                        c1, c2, c3 = st.columns([1, 1, 2])
+                        if c1.button("🗑️ Supprimer", key=f"del_{job['id']}"):
+                            supabase.table("jobs_table").delete().eq("id", job['id']).execute()
+                            st.rerun()
+                            
+                        label = "⏸️ Stop" if job['active'] else "▶️ Activer"
+                        if c2.button(label, key=f"tog_{job['id']}"):
+                            supabase.table("jobs_table").update({"active": not job['active']}).eq("id", job['id']).execute()
+                            st.rerun()
+                        
+                        with c3.expander("🔍 Voir Filtres"):
+                            st.json(job['filters_config'])
 # =============================================================================
 # POINT D'ENTRÉE
 # =============================================================================
