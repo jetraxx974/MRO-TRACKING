@@ -258,7 +258,7 @@ def run_mro_app():
                     else: 
                         st.error("Veuillez remplir le nom, les emails et choisir au moins un jour.")
 
-        with col_list:
+with col_list:
             st.subheader("📋 Mes rapports programmés")
             my_jobs = load_jobs(st.session_state['user_email'])
             
@@ -266,12 +266,14 @@ def run_mro_app():
                 st.info("Aucun rapport planifié pour le moment.")
             else:
                 for job in my_jobs:
+                    # Conversion forcée de l'ID pour Supabase (évite les bugs de type)
+                    target_id = int(job['id'])
+                    
                     # Bordure dynamique : vert si actif, orange sinon
                     border_class = "border-active" if job['active'] else ""
                     icon_status = "🟢 Actif" if job['active'] else "🟠 Inactif"
                     
                     with st.container():
-                        # Application du style transparent avec bordure
                         st.markdown(f"""
                         <div class="job-card {border_class}">
                             <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
@@ -286,14 +288,23 @@ def run_mro_app():
                         """, unsafe_allow_html=True)
                         
                         c1, c2, c3 = st.columns([1, 1, 2])
-                        if c1.button("🗑️ Supprimer", key=f"del_{job['id']}"):
-                            supabase.table("jobs_table").delete().eq("id", job['id']).execute()
-                            st.rerun()
+                        
+                        # --- FIX SUPPRESSION ---
+                        if c1.button("🗑️ Supprimer", key=f"del_{target_id}"):
+                            try:
+                                supabase.table("jobs_table").delete().eq("id", target_id).execute()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erreur : {e}")
                             
+                        # --- FIX ACTIVATION ---
                         label = "⏸️ Stop" if job['active'] else "▶️ Activer"
-                        if c2.button(label, key=f"tog_{job['id']}"):
-                            supabase.table("jobs_table").update({"active": not job['active']}).eq("id", job['id']).execute()
-                            st.rerun()
+                        if c2.button(label, key=f"tog_{target_id}"):
+                            try:
+                                supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erreur : {e}")
                         
                         with c3.expander("🔍 Voir Filtres"):
                             st.json(job['filters_config'])
