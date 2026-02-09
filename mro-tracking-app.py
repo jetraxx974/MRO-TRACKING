@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, time
-import json
 import hashlib
 from supabase import create_client, Client
 
@@ -14,7 +13,7 @@ try:
     key: str = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
 except Exception as e:
-    st.error("❌ Erreur de connexion Supabase. Vérifiez vos 'Secrets'.")
+    st.error("❌ Erreur de connexion Supabase. Vérifiez vos 'Secrets' dans Streamlit Cloud.")
     st.stop()
 
 # --- CSS (DESIGN) ---
@@ -45,14 +44,14 @@ def save_user(email, password, first_name, last_name, company):
     """Inscription nouvel utilisateur dans Supabase"""
     hashed_pw = make_hashes(password)
     
-    # Mapping exact avec ta capture d'écran users_table
+    # Mapping exact avec tes tables Supabase
     data = {
         "email": email,
-        "password": hashed_pw, # Assure-toi d'avoir une colonne password ou modifie ici
+        "password": hashed_pw, 
         "first_name": first_name,
         "last_name": last_name,
         "company": company,
-        "Status": False # False = Gratuit (0), True = Payant (1)
+        "Status": False # False = Gratuit (0), True = Payant (1) - Attention majuscule 'S'
     }
     
     try:
@@ -70,15 +69,13 @@ def login_user(email, password):
         response = supabase.table("users_table").select("*").eq("email", email).execute()
         user_data = response.data
         
-        # Vérification du mot de passe (si colonne password existe dans ta table)
-        # Note: Si tu n'as pas créé la colonne password, l'authentification échouera.
+        # Vérification
         if user_data:
-            # On vérifie le hash. Si tu n'as pas de colonne password, il faudra adapter.
             stored_pw = user_data[0].get('password', '') 
             if stored_pw == hashed_pw:
                 return user_data[0] # On retourne tout l'objet user
     except Exception as e:
-        st.error(f"Erreur de connexion : {e}")
+        st.error(f"Erreur de connexion (Vérifiez la Policy SELECT dans Supabase) : {e}")
     return None
 
 # --- GESTION DES JOBS VIA SUPABASE ---
@@ -86,32 +83,30 @@ def login_user(email, password):
 def load_jobs(user_email):
     """Charge les jobs de l'utilisateur connecté"""
     try:
-        # On filtre par owner_email pour que chacun ne voie que SES tâches
-        # Note: Assure-toi d'avoir une colonne 'owner_email' ou 'recipient' qui sert d'identifiant
+        # Filtre par owner_email
         response = supabase.table("jobs_table").select("*").eq("owner_email", user_email).execute()
         
         # Nettoyage des données pour l'appli
         cleaned_jobs = []
         for job in response.data:
+            # Gestion sécurité si recipient est vide
+            recipients = job['recipient'].split(',') if job.get('recipient') else []
+            
             cleaned_jobs.append({
                 "id": job['id'],
                 "name": job['task_name'],
-                # On transforme le string "a,b" en liste ["a","b"]
-                "recipient": job['recipient'].split(',') if job['recipient'] else [],
+                "recipient": recipients,
                 "frequency_label": job['frequency'],
                 "format": job['format'],
-                "filters_config": job.get('filters_config', {}), # JSONB dans Supabase
-                "active": job.get('active', False) # Bool
+                "filters_config": job.get('filters_config', {}),
+                "active": job.get('active', False)
             })
         return cleaned_jobs
     except Exception as e:
-        # st.error(f"Erreur chargement tâches : {e}") 
         return []
 
 def add_job(job_data):
     """Envoie la tâche vers Supabase"""
-    # Préparation des données pour coller aux colonnes de jobs_table
-    # Les listes doivent être converties en string pour les colonnes 'text'
     db_payload = {
         "task_name": job_data['name'],
         "recipient": ",".join(job_data['recipient']), # Liste -> String
@@ -119,7 +114,7 @@ def add_job(job_data):
         "hour": job_data['hour_str'], # Format HH:MM:SS
         "format": job_data['format'],
         "owner_email": job_data['owner'],
-        "filters_config": job_data['filters_config'], # Supabase gère le JSON auto
+        "filters_config": job_data['filters_config'],
         "active": job_data['active']
     }
     try:
