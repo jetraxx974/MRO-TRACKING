@@ -2,88 +2,147 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, time
 import json
-import os
-import hashlib # Pour la sécurité des mots de passe
+import hashlib
+from supabase import create_client, Client
 
-# --- 1. CONFIGURATION GLOBALE ---
+# --- 1. CONFIGURATION & CONNEXION SUPABASE ---
 st.set_page_config(layout="wide", page_title="AeroControl Tower", page_icon="✈️")
 
-# Fichiers de stockage
-JOBS_FILE = "scheduled_jobs.json"
-USERS_FILE = "users_db.json"
+# Récupération des secrets (Configurés dans Streamlit Cloud)
+try:
+    url: str = st.secrets["SUPABASE_URL"]
+    key: str = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(url, key)
+except Exception as e:
+    st.error("❌ Erreur de connexion Supabase. Vérifiez vos 'Secrets'.")
+    st.stop()
 
 # --- CSS (DESIGN) ---
 st.markdown("""
 <style>
-    /* Global */
     .block-container {padding-top: 1rem;}
-    
-    /* Login Box */
-    .login-container {
-        padding: 30px; border-radius: 10px; background-color: #f0f2f6; 
-        border: 1px solid #d1d5db; max-width: 400px; margin: auto;
-    }
-    
-    /* Cards Tâches */
-    .job-card {
-        padding: 10px; border-radius: 8px; margin-bottom: 8px; border: 1px solid #e0e0e0;
-        transition: transform 0.1s;
-    }
+    .login-container {padding: 30px; border-radius: 10px; background-color: #f0f2f6; border: 1px solid #d1d5db; max-width: 400px; margin: auto;}
+    .job-card {padding: 10px; border-radius: 8px; margin-bottom: 8px; border: 1px solid #e0e0e0; transition: transform 0.1s;}
     .job-card:hover {border-color: #aaa;}
-    
-    /* Statuts */
     .status-active {border-left: 5px solid #2ecc71; background-color: #f0fff4;}
     .status-inactive {border-left: 5px solid #95a5a6; background-color: #f9f9f9;}
-    
     .small-text {font-size: 0.85rem; color: #555;}
     .stButton button {width: 100%;}
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# MODULE SÉCURITÉ & AUTHENTIFICATION
+# MODULE SÉCURITÉ & BASE DE DONNÉES (SUPABASE)
 # =============================================================================
 
 def make_hashes(password):
-    """Transforme le mot de passe en code chiffré illisible."""
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def check_hashes(password, hashed_text):
-    """Vérifie si le mot de passe correspond au hash."""
-    if make_hashes(password) == hashed_text:
-        return hashed_text
-    return False
+    return make_hashes(password) == hashed_text
 
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return {}
-    try:
-        with open(USERS_FILE, 'r') as f:
-            return json.load(f)
-    except: return {}
-
-def save_user(username, password):
-    users = load_users()
-    if username in users:
-        return False # L'utilisateur existe déjà
+def save_user(email, password, first_name, last_name, company):
+    """Inscription nouvel utilisateur dans Supabase"""
+    hashed_pw = make_hashes(password)
     
-    users[username] = {
-        "password": make_hashes(password),
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")
+    # Mapping exact avec ta capture d'écran users_table
+    data = {
+        "email": email,
+        "password": hashed_pw, # Assure-toi d'avoir une colonne password ou modifie ici
+        "first_name": first_name,
+        "last_name": last_name,
+        "company": company,
+        "Status": False # False = Gratuit (0), True = Payant (1)
     }
-    with open(USERS_FILE, 'w') as f:
-        json.dump(users, f, indent=4)
-    return True
+    
+    try:
+        supabase.table("users_table").insert(data).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erreur technique lors de l'inscription : {e}")
+        return False
 
-def login_user(username, password):
-    users = load_users()
-    if username in users:
-        if check_hashes(password, users[username]['password']):
-            return True
-    return False
+def login_user(email, password):
+    """Connexion via Supabase"""
+    hashed_pw = make_hashes(password)
+    try:
+        # On cherche l'utilisateur par email
+        response = supabase.table("users_table").select("*").eq("email", email).execute()
+        user_data = response.data
+        
+        # Vérification du mot de passe (si colonne password existe dans ta table)
+        # Note: Si tu n'as pas créé la colonne password, l'authentification échouera.
+        if user_data:
+            # On vérifie le hash. Si tu n'as pas de colonne password, il faudra adapter.
+            stored_pw = user_data[0].get('password', '') 
+            if stored_pw == hashed_pw:
+                return user_data[0] # On retourne tout l'objet user
+    except Exception as e:
+        st.error(f"Erreur de connexion : {e}")
+    return None
+
+# --- GESTION DES JOBS VIA SUPABASE ---
+
+def load_jobs(user_email):
+    """Charge les jobs de l'utilisateur connecté"""
+    try:
+        # On filtre par owner_email pour que chacun ne voie que SES tâches
+        # Note: Assure-toi d'avoir une colonne 'owner_email' ou 'recipient' qui sert d'identifiant
+        response = supabase.table("jobs_table").select("*").eq("owner_email", user_email).execute()
+        
+        # Nettoyage des données pour l'appli
+        cleaned_jobs = []
+        for job in response.data:
+            cleaned_jobs.append({
+                "id": job['id'],
+                "name": job['task_name'],
+                # On transforme le string "a,b" en liste ["a","b"]
+                "recipient": job['recipient'].split(',') if job['recipient'] else [],
+                "frequency_label": job['frequency'],
+                "format": job['format'],
+                "filters_config": job.get('filters_config', {}), # JSONB dans Supabase
+                "active": job.get('active', False) # Bool
+            })
+        return cleaned_jobs
+    except Exception as e:
+        # st.error(f"Erreur chargement tâches : {e}") 
+        return []
+
+def add_job(job_data):
+    """Envoie la tâche vers Supabase"""
+    # Préparation des données pour coller aux colonnes de jobs_table
+    # Les listes doivent être converties en string pour les colonnes 'text'
+    db_payload = {
+        "task_name": job_data['name'],
+        "recipient": ",".join(job_data['recipient']), # Liste -> String
+        "frequency": job_data['frequency_label'],
+        "hour": job_data['hour_str'], # Format HH:MM:SS
+        "format": job_data['format'],
+        "owner_email": job_data['owner'],
+        "filters_config": job_data['filters_config'], # Supabase gère le JSON auto
+        "active": job_data['active']
+    }
+    try:
+        supabase.table("jobs_table").insert(db_payload).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erreur sauvegarde tâche: {e}")
+        return False
+
+def update_job_status(job_id, status):
+    try:
+        supabase.table("jobs_table").update({"active": status}).eq("id", job_id).execute()
+    except Exception as e:
+        st.error(f"Erreur update: {e}")
+
+def delete_job(job_id):
+    try:
+        supabase.table("jobs_table").delete().eq("id", job_id).execute()
+    except Exception as e:
+        st.error(f"Erreur delete: {e}")
 
 # =============================================================================
-# FONCTIONS BACKEND MRO (Ton code original)
+# FONCTIONS LOGIQUE MÉTIER (Visualisation)
 # =============================================================================
 
 @st.cache_data
@@ -116,43 +175,19 @@ def filter_date(df, date_col, days):
         return df.loc[temp_df[temp_df[date_col] >= cutoff].index]
     except: return df
 
-# --- GESTION JSON TACHES ---
-def load_jobs():
-    if not os.path.exists(JOBS_FILE): return []
-    try:
-        with open(JOBS_FILE, 'r') as f: return json.load(f)
-    except: return []
-
-def save_jobs_list(jobs):
-    with open(JOBS_FILE, 'w') as f: json.dump(jobs, f, indent=4)
-
-def add_job(job_data):
-    jobs = load_jobs()
-    jobs.append(job_data)
-    save_jobs_list(jobs)
-
-def update_job_status(index, status):
-    jobs = load_jobs()
-    if 0 <= index < len(jobs):
-        jobs[index]['active'] = status
-        save_jobs_list(jobs)
-
-def delete_job(index):
-    jobs = load_jobs()
-    if 0 <= index < len(jobs):
-        del jobs[index]
-        save_jobs_list(jobs)
-
 # =============================================================================
-# L'APPLICATION PRINCIPALE (MRO APP)
+# APPLICATION PRINCIPALE
 # =============================================================================
 
 def run_mro_app():
-    # C'est ta fonction main() originale, renommée pour être appelée après le login
-    
-    # Sidebar de déconnexion
+    # Sidebar Info Utilisateur
     with st.sidebar:
-        st.write(f"👤 Connecté: **{st.session_state['username']}**")
+        st.write(f"👤 **{st.session_state['user_first_name']} {st.session_state['user_last_name']}**")
+        st.caption(f"🏢 {st.session_state['user_company']}")
+        
+        status_label = "Premium 💎" if st.session_state.get('user_status') else "Gratuit  standard"
+        st.info(f"Plan : {status_label}")
+        
         if st.button("Déconnexion", type="primary"):
             st.session_state['logged_in'] = False
             st.rerun()
@@ -175,7 +210,7 @@ def run_mro_app():
 
     tab_visu, tab_plan = st.tabs(["📊 Visualisation", "📅 Planification & Envois"])
 
-    # --- ONGLET 1 ---
+    # --- ONGLET 1 : VISUALISATION ---
     with tab_visu:
         with st.expander("⚙️ Configuration Globale", expanded=False):
             c1, c2, c3 = st.columns([1, 1, 2])
@@ -217,7 +252,7 @@ def run_mro_app():
             st.metric("Lignes affichées", len(df_final), delta=f"sur {len(df_raw)} total")
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
 
-    # --- ONGLET 2 ---
+    # --- ONGLET 2 : PLANIFICATION (Connecté à Jobs_Table) ---
     with tab_plan:
         col_form, col_list = st.columns([1, 1.5])
         with col_form:
@@ -227,122 +262,119 @@ def run_mro_app():
                 recipients = st.text_input("Destinataires (virgule)", placeholder="a@a.com, b@b.com")
                 freq_type = st.selectbox("Fréquence", ["Quotidien", "Hebdomadaire", "Mensuel"])
                 
-                # Logique simplifiée pour l'affichage
-                freq_txt = freq_type 
-                
                 send_time = st.time_input("Heure", value=time(8, 0))
-                full_freq = f"{freq_txt} à {send_time.strftime('%H:%M')}"
+                full_freq = f"{freq_type} à {send_time.strftime('%H:%M')}"
                 format_export = st.selectbox("Format", ["Excel (.xlsx)", "CSV"])
                 
-                if st.form_submit_button("💾 Créer"):
+                if st.form_submit_button("💾 Enregistrer"):
                     if job_name and recipients:
-                        new_job = {
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S"),
-                            "created_at": datetime.now().strftime("%d/%m/%Y"),
+                        new_job_data = {
                             "name": job_name,
                             "recipient": [r.strip() for r in recipients.split(',')],
                             "frequency_label": full_freq,
+                            "hour_str": str(send_time), # Format HH:MM:SS pour Supabase Time
                             "format": format_export,
                             "filters_config": st.session_state['active_filters'],
                             "active": False,
-                            "owner": st.session_state['username'] # On lie la tache au user
+                            "owner": st.session_state['user_email'] # Lien avec l'utilisateur
                         }
-                        add_job(new_job)
-                        st.success("Tâche créée !")
-                        st.rerun()
+                        if add_job(new_job_data):
+                            st.success("Tâche sauvegardée dans le cloud !")
+                            st.rerun()
                     else: st.error("Champs manquants")
 
         with col_list:
-            st.subheader("2. Tâches Planifiées")
-            search_query = st.text_input("🔎 Rechercher...", "")
-            jobs = load_jobs()
-            if search_query: jobs = [j for j in jobs if search_query.lower() in j.get('name', '').lower()]
+            st.subheader("2. Mes Tâches (Cloud)")
+            # Chargement depuis Supabase
+            jobs = load_jobs(st.session_state['user_email'])
             
-            if not jobs: st.warning("Aucune tâche.")
+            if not jobs: st.info("Aucune tâche planifiée.")
             else:
-                for i, job in enumerate(jobs):
-                    job_name = job.get('name', 'N/A')
-                    is_active = job.get('active', False)
+                for job in jobs:
+                    is_active = job['active']
                     status_class = "status-active" if is_active else "status-inactive"
                     status_icon = "🟢" if is_active else "⚪"
-                    recips = ', '.join(job.get('recipient', [])) if isinstance(job.get('recipient'), list) else str(job.get('recipient'))
+                    recips_str = ', '.join(job['recipient'])
                     
                     st.markdown(f"""
                     <div class="job-card {status_class}">
                         <div style="display:flex; justify-content:space-between;">
-                            <b>{job_name}</b> <span>{status_icon}</span>
+                            <b>{job['name']}</b> <span>{status_icon}</span>
                         </div>
-                        <div class="small-text">Dest: {recips} <br> Freq: {job.get('frequency_label', 'N/A')}</div>
+                        <div class="small-text">Dest: {recips_str} <br> Freq: {job['frequency_label']}</div>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     c1, c2, c3 = st.columns([2, 1, 2])
                     if is_active:
-                        if c1.button("Désactiver", key=f"stop_{i}"):
-                            update_job_status(i, False)
+                        if c1.button("Désactiver", key=f"stop_{job['id']}"):
+                            update_job_status(job['id'], False)
                             st.rerun()
                     else:
-                        if c1.button("Activer", key=f"start_{i}", type="primary"):
-                            update_job_status(i, True)
+                        if c1.button("Activer", key=f"start_{job['id']}", type="primary"):
+                            update_job_status(job['id'], True)
                             st.rerun()
-                    if c2.button("🗑️", key=f"del_{i}"):
-                        delete_job(i)
+                    if c2.button("🗑️", key=f"del_{job['id']}"):
+                        delete_job(job['id'])
                         st.rerun()
                     with c3.expander("Détails"):
-                        st.json(job.get('filters_config', {}))
+                        st.json(job['filters_config'])
 
 # =============================================================================
-# POINT D'ENTRÉE & GESTION DE SESSION (LOGIN/REGISTER)
+# POINT D'ENTRÉE & LOGIN
 # =============================================================================
 
 def main():
-    # Initialisation de la session
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
-        st.session_state['username'] = None
+        st.session_state['user_email'] = None
 
-    # SI PAS CONNECTÉ : On affiche Login / Sign Up
+    # ECRAN DE CONNEXION / INSCRIPTION
     if not st.session_state['logged_in']:
         
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            st.title("🔒 AeroTrack Login")
+            st.title("🔒 AeroTrack")
             
-            choice = st.selectbox("Menu", ["Se Connecter", "S'inscrire"])
+            choice = st.selectbox("Action", ["Se Connecter", "S'inscrire (Nouveau)"])
             
             if choice == "Se Connecter":
                 with st.form("login_form"):
-                    username = st.text_input("Utilisateur")
+                    email = st.text_input("Email")
                     password = st.text_input("Mot de passe", type='password')
-                    submit = st.form_submit_button("Entrer")
-                    
-                    if submit:
-                        if login_user(username, password):
+                    if st.form_submit_button("Entrer"):
+                        user = login_user(email, password)
+                        if user:
                             st.session_state['logged_in'] = True
-                            st.session_state['username'] = username
-                            st.success("Connexion réussie !")
+                            st.session_state['user_email'] = user['email']
+                            st.session_state['user_first_name'] = user['first_name']
+                            st.session_state['user_last_name'] = user['last_name']
+                            st.session_state['user_company'] = user['company']
+                            st.session_state['user_status'] = user['Status']
+                            st.success("Connexion...")
                             st.rerun()
                         else:
-                            st.error("Utilisateur ou mot de passe incorrect.")
+                            st.error("Email ou mot de passe incorrect.")
             
-            else: # Inscription
+            else: # INSCRIPTION COMPLÈTE
                 with st.form("signup_form"):
-                    st.subheader("Créer un compte")
-                    new_user = st.text_input("Nouvel Utilisateur")
-                    new_password = st.text_input("Nouveau Mot de passe", type='password')
-                    confirm_password = st.text_input("Confirmer Mot de passe", type='password')
-                    submit = st.form_submit_button("S'inscrire")
+                    st.subheader("Inscription Client")
+                    c_a, c_b = st.columns(2)
+                    new_first = c_a.text_input("Prénom")
+                    new_last = c_b.text_input("Nom")
+                    new_company = st.text_input("Entreprise")
+                    new_email = st.text_input("Email pro")
+                    new_password = st.text_input("Mot de passe", type='password')
                     
-                    if submit:
-                        if new_password == confirm_password:
-                            if save_user(new_user, new_password):
-                                st.success("Compte créé ! Vous pouvez vous connecter.")
+                    if st.form_submit_button("Créer mon compte"):
+                        if new_email and new_password:
+                            if save_user(new_email, new_password, new_first, new_last, new_company):
+                                st.success("Compte créé ! Connectez-vous.")
                             else:
-                                st.warning("Cet utilisateur existe déjà.")
+                                st.error("Erreur (Email déjà pris ?)")
                         else:
-                            st.error("Les mots de passe ne correspondent pas.")
+                            st.warning("Tout remplir SVP.")
     
-    # SI CONNECTÉ : On lance l'application MRO
     else:
         run_mro_app()
 
