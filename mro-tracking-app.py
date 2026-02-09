@@ -127,6 +127,8 @@ def run_mro_app():
         st.caption(f"🏢 {st.session_state['user_company']}")
         if st.button("Déconnexion", type="primary"):
             st.session_state['logged_in'] = False
+            # On vide le cache persistant à la déconnexion
+            if 'df_persistent' in st.session_state: del st.session_state['df_persistent']
             st.rerun()
         st.markdown("---")
 
@@ -135,13 +137,32 @@ def run_mro_app():
     with st.expander("📂 Source de Données", expanded=True):
         uploaded_file = st.file_uploader("Fichier Excel/CSV", type=['xlsx', 'csv'])
 
-    if uploaded_file is None:
-        st.info("Veuillez importer un fichier pour activer les outils.")
+    # --- LOGIQUE DE PERSISTANCE (300k LIGNES) ---
+    df_raw = None
+
+    if uploaded_file is not None:
+        # Cas 1 : Nouvel import manuel
+        df_raw = load_data(uploaded_file)
+        if df_raw is not None:
+            # Sauvegarde massive dans Supabase
+            save_imported_data(df_raw, st.session_state['user_email'])
+            # Mise à jour du cache local
+            st.session_state['df_persistent'] = df_raw
+            st.success(f"✅ Données synchronisées : {len(df_raw)} lignes enregistrées.")
+    else:
+        # Cas 2 : Pas d'upload, on regarde dans le cache session ou dans la base
+        if 'df_persistent' not in st.session_state or st.session_state['df_persistent'] is None:
+            with st.spinner("🔄 Récupération de vos données sauvegardées..."):
+                st.session_state['df_persistent'] = load_stored_data(st.session_state['user_email'])
+        
+        df_raw = st.session_state['df_persistent']
+
+    # On ne continue que si on a des données
+    if df_raw is None:
+        st.info("👋 Bienvenue ! Veuillez importer un fichier pour activer les outils.")
         return
 
-    df_raw = load_data(uploaded_file)
-    if df_raw is None: return
-
+    # --- AFFICHAGE DES ONGLETS ---
     tab_visu, tab_plan = st.tabs(["📊 Visualisation", "📅 Planification & Envois"])
 
     # --- ONGLET 1 : VISUALISATION ---
@@ -185,7 +206,6 @@ def run_mro_app():
         
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
         st.session_state['active_filters'] = current_filters_config
-
    # --- ONGLET 2 : PLANIFICATION ---
 # --- ONGLET 2 : PLANIFICATION ---
     with tab_plan:
@@ -277,6 +297,63 @@ def run_mro_app():
                         
                         with c3.expander("🔍 Voir Filtres"):
                             st.json(job['filters_config'])
+
+# =============================================================================
+# SAVE IMPORTED DATA
+# =============================================================================
+def save_imported_data(df, user_email):
+    """Sauvegarde massive par paquets de 5000 lignes"""
+    try:
+        # 1. On vide les anciennes données de cet utilisateur pour repartir à propre
+        supabase.table("raw_data_table").delete().eq("owner_email", user_email).execute()
+        
+        # 2. Préparation des données
+        all_rows = [{"owner_email": user_email, "row_data": row} for row in df.to_dict(orient='records')]
+        
+        # 3. Envoi par morceaux (Chunks) pour éviter les Timeouts
+        chunk_size = 5000
+        total = len(all_rows)
+        progress_bar = st.progress(0, text="Sauvegarde dans la base de données...")
+        
+        for i in range(0, total, chunk_size):
+            chunk = all_rows[i : i + chunk_size]
+            supabase.table("raw_data_table").insert(chunk).execute()
+            # Mise à jour de la barre
+            pct = min((i + chunk_size) / total, 1.0)
+            progress_bar.progress(pct, text=f"Sauvegarde : {int(pct*100)}%")
+            
+        progress_bar.empty()
+        return True
+    except Exception as e:
+        st.error(f"Erreur lors de la sauvegarde : {e}")
+        return False
+
+def load_stored_data(user_email):
+    """Récupération de gros volumes par pagination (Supabase limite à 1000 par défaut)"""
+    try:
+        all_data = []
+        page_size = 10000 # On récupère 10k par 10k
+        start = 0
+        
+        while True:
+            res = supabase.table("raw_data_table") \
+                .select("row_data") \
+                .eq("owner_email", user_email) \
+                .range(start, start + page_size - 1) \
+                .execute()
+            
+            if not res.data:
+                break
+            
+            all_data.extend([item['row_data'] for item in res.data])
+            if len(res.data) < page_size:
+                break
+            start += page_size
+            
+        return pd.DataFrame(all_data) if all_data else None
+    except Exception as e:
+        st.error(f"Erreur de récupération : {e}")
+        return None
 # =============================================================================
 # POINT D'ENTRÉE
 # =============================================================================
@@ -321,3 +398,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
