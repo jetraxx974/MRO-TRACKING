@@ -4,24 +4,24 @@ from datetime import datetime, timedelta, time
 import hashlib
 from supabase import create_client, Client
 
-# --- 1. CONFIGURATION & CONNEXION SUPABASE ---
+# --- 1. CONFIGURATION & SUPABASE CONNECTION ---
 st.set_page_config(layout="wide", page_title="AeroControl Tower", page_icon="✈️")
 
-# Récupération des secrets
+# Retrieve secrets
 try:
     url: str = st.secrets["SUPABASE_URL"]
     key: str = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
 except Exception as e:
-    st.error("❌ Erreur de connexion Supabase. Vérifiez vos 'Secrets' dans Streamlit Cloud.")
+    st.error("❌ Supabase connection error. Check your 'Secrets' in Streamlit Cloud.")
     st.stop()
 
-# --- CSS (DESIGN MIS À JOUR) ---
+# --- CSS (UPDATED DESIGN) ---
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem;}
     
-    /* CARTE TRANSPARENTE / BORDURE ORANGE PALE */
+    /* TRANSPARENT CARD / PALE ORANGE BORDER */
     .job-card {
         padding: 15px; 
         border-radius: 10px; 
@@ -30,7 +30,7 @@ st.markdown("""
         border: 2px solid #FFCC80; 
     }
     
-    /* BORDURE VERTE POUR LES ACTIFS */
+    /* GREEN BORDER FOR ACTIVE JOBS */
     .border-active {
         border: 2px solid #2ECC71 !important;
     }
@@ -38,8 +38,9 @@ st.markdown("""
     .small-text {font-size: 0.85rem; opacity: 0.9;}
 </style>
 """, unsafe_allow_html=True)
+
 # =============================================================================
-# MODULE SÉCURITÉ & BASE DE DONNÉES
+# SECURITY & DATABASE MODULE
 # =============================================================================
 
 def make_hashes(password):
@@ -56,7 +57,7 @@ def save_user(email, password, first_name, last_name, company):
         supabase.table("users_table").insert(data).execute()
         return True
     except Exception as e:
-        st.error(f"Erreur inscription : {e}")
+        st.error(f"Signup error: {e}")
         return False
 
 def login_user(email, password):
@@ -66,7 +67,7 @@ def login_user(email, password):
         if res.data and res.data[0].get('password') == hashed_pw:
             return res.data[0]
     except Exception as e:
-        st.error(f"Erreur connexion : {e}")
+        st.error(f"Login error: {e}")
     return None
 
 def load_jobs(user_email):
@@ -81,11 +82,11 @@ def add_job(job_data):
         supabase.table("jobs_table").insert(job_data).execute()
         return True
     except Exception as e:
-        st.error(f"Erreur enregistrement tâche : {e}")
+        st.error(f"Error saving task: {e}")
         return False
 
 # =============================================================================
-# LOGIQUE MÉTIER
+# BUSINESS LOGIC
 # =============================================================================
 
 @st.cache_data
@@ -105,7 +106,7 @@ def load_data(uploaded_file):
                 except: pass
         return df.fillna("")
     except Exception as e:
-        st.error(f"Erreur import : {e}")
+        st.error(f"Import error: {e}")
         return None
 
 def filter_date(df, date_col, days):
@@ -118,63 +119,63 @@ def filter_date(df, date_col, days):
     except: return df
 
 # =============================================================================
-# APPLICATION PRINCIPALE
+# MAIN APPLICATION
 # =============================================================================
 
 def run_mro_app():
     with st.sidebar:
         st.write(f"👤 **{st.session_state['user_first_name']} {st.session_state['user_last_name']}**")
         st.caption(f"🏢 {st.session_state['user_company']}")
-        if st.button("Déconnexion", type="primary"):
+        if st.button("Logout", type="primary"):
             st.session_state['logged_in'] = False
-            # On vide le cache persistant à la déconnexion
+            # Clear persistent cache on logout
             if 'df_persistent' in st.session_state: del st.session_state['df_persistent']
             st.rerun()
         st.markdown("---")
 
     st.title("✈️ MRO Control Tower")
 
-    with st.expander("📂 Source de Données", expanded=True):
-        uploaded_file = st.file_uploader("Fichier Excel/CSV", type=['xlsx', 'csv'])
+    with st.expander("📂 Data Source", expanded=True):
+        uploaded_file = st.file_uploader("Excel/CSV File", type=['xlsx', 'csv'])
 
-    # --- LOGIQUE DE PERSISTANCE (300k LIGNES) ---
+    # --- PERSISTENCE LOGIC (300k ROWS) ---
     df_raw = None
 
     if uploaded_file is not None:
-        # Cas 1 : Nouvel import manuel
+        # Case 1: New manual import
         df_raw = load_data(uploaded_file)
         if df_raw is not None:
-            # Sauvegarde massive dans Supabase
+            # Massive save to Supabase
             save_imported_data(df_raw, st.session_state['user_email'])
-            # Mise à jour du cache local
+            # Update local cache
             st.session_state['df_persistent'] = df_raw
-            st.success(f"✅ Données synchronisées : {len(df_raw)} lignes enregistrées.")
+            st.success(f"✅ Data synchronized: {len(df_raw)} rows saved.")
     else:
-        # Cas 2 : Pas d'upload, on regarde dans le cache session ou dans la base
+        # Case 2: No upload, check session cache or database
         if 'df_persistent' not in st.session_state or st.session_state['df_persistent'] is None:
-            with st.spinner("🔄 Récupération de vos données sauvegardées..."):
+            with st.spinner("🔄 Retrieving saved data..."):
                 st.session_state['df_persistent'] = load_stored_data(st.session_state['user_email'])
         
         df_raw = st.session_state['df_persistent']
 
-    # On ne continue que si on a des données
+    # Continue only if data exists
     if df_raw is None:
-        st.info("👋 Bienvenue ! Veuillez importer un fichier pour activer les outils.")
+        st.info("👋 Welcome! Please import a file to activate the tools.")
         return
 
-    # --- AFFICHAGE DES ONGLETS ---
-    tab_visu, tab_plan = st.tabs(["📊 Visualisation", "📅 Planification & Envois"])
+    # --- TABS DISPLAY ---
+    tab_visu, tab_plan = st.tabs(["📊 Visualization", "📅 Planning & Delivery"])
 
-    # --- ONGLET 1 : VISUALISATION ---
+    # --- TAB 1: VISUALIZATION ---
     with tab_visu:
-        with st.expander("⚙️ Configuration des filtres & colonnes", expanded=False):
+        with st.expander("⚙️ Filter & Column Configuration", expanded=False):
             c1, c2, c3 = st.columns([1, 1, 2])
             cols_date = [c for c in df_raw.columns if 'date' in c.lower()]
             default_date = cols_date[0] if cols_date else df_raw.columns[0]
             
-            date_col = c1.selectbox("Colonne Date Référence", df_raw.columns, index=list(df_raw.columns).index(default_date))
-            master_filter_cols = c2.multiselect("Définir Master Filters", [c for c in df_raw.columns if c != date_col])
-            displayed_columns = c3.multiselect("Colonnes à afficher", options=df_raw.columns, default=list(df_raw.columns))
+            date_col = c1.selectbox("Reference Date Column", df_raw.columns, index=list(df_raw.columns).index(default_date))
+            master_filter_cols = c2.multiselect("Define Master Filters", [c for c in df_raw.columns if c != date_col])
+            displayed_columns = c3.multiselect("Columns to Display", options=df_raw.columns, default=list(df_raw.columns))
 
         st.markdown("##### 🔍 Master Filters")
         df_final = df_raw.copy()
@@ -184,9 +185,9 @@ def run_mro_app():
             filt_cols = st.columns(len(master_filter_cols))
             for i, col_name in enumerate(master_filter_cols):
                 val_counts = df_final[col_name].astype(str).value_counts()
-                options = ["TOUT"] + [f"{val} ({count})" for val, count in val_counts.items()]
+                options = ["ALL"] + [f"{val} ({count})" for val, count in val_counts.items()]
                 selected = filt_cols[i].selectbox(f"{col_name}", options, key=f"dyn_{col_name}")
-                if selected != "TOUT":
+                if selected != "ALL":
                     clean_val = selected.rpartition(' (')[0]
                     df_final = df_final[df_final[col_name].astype(str) == clean_val]
                     current_filters_config[col_name] = clean_val
@@ -194,53 +195,49 @@ def run_mro_app():
         st.markdown("---")
         c_time, c_kpi = st.columns([2, 1])
         with c_time:
-            period = st.radio("Période :", ["Tout voir", "7 Jours", "30 Jours", "90 Jours"], horizontal=True)
-            days_map = {"Tout voir": 0, "7 Jours": 7, "30 Jours": 30, "90 Jours": 90}
+            period = st.radio("Period:", ["View All", "7 Days", "30 Days", "90 Days"], horizontal=True)
+            days_map = {"View All": 0, "7 Days": 7, "30 Days": 30, "90 Days": 90}
             days = days_map[period]
             df_final = filter_date(df_final, date_col, days)
             current_filters_config["retention_days"] = days
             current_filters_config["date_column"] = date_col
 
         with c_kpi:
-            st.metric("Lignes affichées", len(df_final), delta=f"sur {len(df_raw)} total")
+            st.metric("Displayed Rows", len(df_final), delta=f"out of {len(df_raw)} total")
         
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
         st.session_state['active_filters'] = current_filters_config
-   # --- ONGLET 2 : PLANIFICATION ---
-# --- ONGLET 2 : PLANIFICATION ---
+
+    # --- TAB 2: PLANNING ---
     with tab_plan:
         col_form, col_list = st.columns([1, 1.5])
         
         with col_form:
-            st.subheader("🚀 Nouveau Rapport")
+            st.subheader("🚀 New Report")
             with st.form("new_job_form"):
-                job_name = st.text_input("Nom du rapport")
-                recipients = st.text_input("Emails des destinataires (séparés par des virgules)")
+                job_name = st.text_input("Report Name")
+                recipients = st.text_input("Recipient Emails (comma separated)")
                 
-                # --- NOUVELLE LOGIQUE DE FRÉQUENCE ---
-                st.write("**Configuration de l'envoi**")
+                st.write("**Delivery Configuration**")
                 
-                # Cases à cocher pour les jours (on peut en sélectionner plusieurs)
                 selected_days = st.multiselect(
-                    "Jours de la semaine", 
-                    ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"],
-                    default=["Lundi"]
+                    "Days of the Week", 
+                    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                    default=["Monday"]
                 )
                 
-                # Précision de la récurrence
                 recurrence = st.selectbox(
-                    "Intervalle", 
-                    ["Toutes les semaines", "Toutes les 2 semaines", "Toutes les 4 semaines"]
+                    "Interval", 
+                    ["Every week", "Every 2 weeks", "Every 4 weeks"]
                 )
                 
-                # On combine pour la base de données
                 days_str = ", ".join(selected_days)
                 final_frequency_str = f"{days_str} ({recurrence})"
                 
-                send_time = st.time_input("Heure d'envoi", value=time(8, 0))
+                send_time = st.time_input("Delivery Time", value=time(8, 0))
                 fmt = st.selectbox("Format", ["Excel (.xlsx)", "CSV"])
                 
-                if st.form_submit_button("💾 Enregistrer"):
+                if st.form_submit_button("💾 Save"):
                     if job_name and recipients and selected_days:
                         new_job = {
                             "task_name": job_name,
@@ -253,96 +250,100 @@ def run_mro_app():
                             "active": False
                         }
                         if add_job(new_job):
-                            st.success("Planification enregistrée !")
+                            st.success("Planning saved!")
                             st.rerun()
                     else: 
-                        st.error("Veuillez remplir le nom, les emails et choisir au moins un jour.")
+                        st.error("Please fill in the name, emails, and choose at least one day.")
 
-    with col_list:
-            st.subheader("📋 Mes rapports programmés")
+        with col_list:
+            st.subheader("📋 My Scheduled Reports")
             my_jobs = load_jobs(st.session_state['user_email'])
             
             if not my_jobs:
-                st.info("Aucun rapport planifié.")
+                st.info("No reports scheduled.")
             else:
                 for job in my_jobs:
                     target_id = int(job['id'])
                     border_class = "border-active" if job['active'] else ""
+                    icon_status = "🟢 Active" if job['active'] else "🟠 Inactive"
                     
                     with st.container():
                         st.markdown(f"""
                         <div class="job-card {border_class}">
-                            <strong style="font-size:1.1em;">{job['task_name']}</strong><br>
-                            <small>📅 {job['frequency']} | 📧 {job['recipient']}</small>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                <strong style="font-size:1.1em;">{job['task_name']}</strong>
+                                <span>{icon_status}</span>
+                            </div>
+                            <div class="small-text">
+                                📅 <b>{job['frequency']}</b> at {job['hour']}<br>
+                                📧 {job['recipient']} | 📁 {job['format']}
+                            </div>
                         </div>
                         """, unsafe_allow_html=True)
                         
                         c1, c2, c3 = st.columns([1, 1, 1])
                         
-                        # --- BOUTON SUPPRIMER AVEC RETOUR D'ERREUR ---
-                        if c1.button("🗑️ Supprimer", key=f"del_btn_{target_id}"):
-                            # On tente la suppression et on capture le résultat
+                        if c1.button("🗑️ Delete", key=f"del_btn_{target_id}"):
                             res = supabase.table("jobs_table").delete().eq("id", target_id).execute()
-                            
-                            # Si Supabase a supprimé quelque chose, res.data contiendra la ligne supprimée
                             if res.data:
-                                st.success("Supprimé !")
+                                st.success("Deleted!")
                                 st.rerun()
                             else:
-                                # Si res.data est vide, c'est que rien n'a été trouvé ou supprimé
-                                st.error(f"Impossible de supprimer l'ID {target_id}. Vérifiez les Policies Supabase.")
+                                st.error(f"Cannot delete ID {target_id}. Check Supabase Policies.")
                         
-                        # --- BOUTON ACTIVER ---
-                        btn_label = "⏸️ Stop" if job['active'] else "▶️ Activer"
+                        btn_label = "⏸️ Stop" if job['active'] else "▶️ Activate"
                         if c2.button(btn_label, key=f"tog_btn_{target_id}"):
                             supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
                             st.rerun()
+
+                        with c3.expander("🔍 View Filters"):
+                            st.json(job['filters_config'])
+
 # =============================================================================
-# SAVE IMPORTED DATA
+# DATA STORAGE HELPERS
 # =============================================================================
+
 def save_imported_data(df, user_email):
-    """Sauvegarde massive : gère les dates ET les valeurs NaN/vides"""
+    """Massive save: handles dates AND NaN/empty values"""
     try:
-        # 1. On vide les anciennes données
+        # 1. Clear old data
         supabase.table("raw_data_table").delete().eq("owner_email", user_email).execute()
         
-        # 2. Nettoyage et conversion
+        # 2. Cleaning and conversion
         df_save = df.copy()
         
-        # Conversion des dates en texte
         for col in df_save.columns:
             if pd.api.types.is_datetime64_any_dtype(df_save[col]):
                 df_save[col] = df_save[col].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # REMPLACEMENT DES NaN PAR None (pour être compatible JSON null)
-        # C'est cette ligne qui corrige ton erreur actuelle
+        # Replace NaN with None for JSON compliance
         df_save = df_save.where(pd.notnull(df_save), None)
         
-        # 3. Préparation des dictionnaires
+        # 3. Prepare dictionaries
         all_rows = [{"owner_email": user_email, "row_data": row} for row in df_save.to_dict(orient='records')]
         
-        # 4. Envoi par paquets de 5000
+        # 4. Batch send (chunks of 5000)
         chunk_size = 5000
         total = len(all_rows)
-        progress_bar = st.progress(0, text="Synchronisation massive...")
+        progress_bar = st.progress(0, text="Mass Synchronization...")
         
         for i in range(0, total, chunk_size):
             chunk = all_rows[i : i + chunk_size]
             supabase.table("raw_data_table").insert(chunk).execute()
             pct = min((i + chunk_size) / total, 1.0)
-            progress_bar.progress(pct, text=f"Envoi des données : {int(pct*100)}%")
+            progress_bar.progress(pct, text=f"Uploading data: {int(pct*100)}%")
             
         progress_bar.empty()
         return True
     except Exception as e:
-        st.error(f"Erreur lors de la sauvegarde : {e}")
+        st.error(f"Save error: {e}")
         return False
 
 def load_stored_data(user_email):
-    """Récupération de gros volumes par pagination (Supabase limite à 1000 par défaut)"""
+    """Retrieve large volumes via pagination"""
     try:
         all_data = []
-        page_size = 10000 # On récupère 10k par 10k
+        page_size = 10000 
         start = 0
         
         while True:
@@ -362,10 +363,11 @@ def load_stored_data(user_email):
             
         return pd.DataFrame(all_data) if all_data else None
     except Exception as e:
-        st.error(f"Erreur de récupération : {e}")
+        st.error(f"Retrieval error: {e}")
         return None
+
 # =============================================================================
-# POINT D'ENTRÉE
+# ENTRY POINT
 # =============================================================================
 
 def main():
@@ -375,14 +377,14 @@ def main():
     if not st.session_state['logged_in']:
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            st.title("🔒 Accès AeroTrack")
-            choice = st.selectbox("Action", ["Connexion", "Inscription"])
+            st.title("🔒 AeroTrack Access")
+            choice = st.selectbox("Action", ["Login", "Sign Up"])
             
-            if choice == "Connexion":
+            if choice == "Login":
                 with st.form("login"):
                     e = st.text_input("Email")
-                    p = st.text_input("Mot de passe", type='password')
-                    if st.form_submit_button("Se connecter"):
+                    p = st.text_input("Password", type='password')
+                    if st.form_submit_button("Connect"):
                         u = login_user(e, p)
                         if u:
                             st.session_state.update({
@@ -391,21 +393,20 @@ def main():
                                 "user_company": u['company'], "user_status": u['Status']
                             })
                             st.rerun()
-                        else: st.error("Email ou mot de passe incorrect.")
+                        else: st.error("Incorrect email or password.")
             else:
                 with st.form("signup"):
-                    fn = st.text_input("Prénom")
-                    ln = st.text_input("Nom")
-                    cp = st.text_input("Entreprise")
-                    em = st.text_input("Email professionnel")
-                    pw = st.text_input("Mot de passe", type='password')
-                    if st.form_submit_button("Créer mon compte"):
+                    fn = st.text_input("First Name")
+                    ln = st.text_input("Last Name")
+                    cp = st.text_input("Company")
+                    em = st.text_input("Work Email")
+                    pw = st.text_input("Password", type='password')
+                    if st.form_submit_button("Create my account"):
                         if em and pw:
-                            if save_user(em, pw, fn, ln, cp): st.success("Compte créé ! Connectez-vous.")
-                        else: st.warning("Veuillez remplir les champs obligatoires.")
+                            if save_user(em, pw, fn, ln, cp): st.success("Account created! Please log in.")
+                        else: st.warning("Please fill in mandatory fields.")
     else:
         run_mro_app()
 
 if __name__ == "__main__":
     main()
-    
