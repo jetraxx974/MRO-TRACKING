@@ -1,0 +1,18 @@
+[
+    {
+        "id": "20260209194946",
+        "created_at": "09/02/2026 19:49",
+        "name": "INDIGO TEST",
+        "recipient": [
+            "b.lesage.fr@gmail.com"
+        ],
+        "frequency_label": "Quotidien |  \u00e0 20:00",
+        "format": "Excel (.xlsx)",
+        "filters_config": {
+            "Customer: Customer Name": "INDIGO",
+            "date_range": null
+        },
+        "active": false,
+        "source_file": "mro trackos.xlsx"
+    }
+]
