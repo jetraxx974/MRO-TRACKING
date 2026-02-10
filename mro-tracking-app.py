@@ -70,9 +70,12 @@ def login_user(email, password):
         st.error(f"Login error: {e}")
     return None
 
+# --- JOB FUNCTIONS ---
+
 def load_jobs(user_email):
     try:
-        res = supabase.table("jobs_table").select("*").eq("owner_email", user_email).execute()
+        # Added .order("id") for stability
+        res = supabase.table("jobs_table").select("*").eq("owner_email", user_email).order("id").execute()
         return res.data if res.data else []
     except: return []
 
@@ -84,6 +87,44 @@ def add_job(job_data):
     except Exception as e:
         st.error(f"Error saving task: {e}")
         return False
+
+# --- NEW FOLDER FUNCTIONS (ADDED) ---
+
+def get_folders(user_email):
+    """Fetch all folders for the user"""
+    try:
+        res = supabase.table("folders_table").select("*").eq("owner_email", user_email).order("created_at").execute()
+        return res.data if res.data else []
+    except: return []
+
+def create_folder(name, user_email):
+    """Create a new folder"""
+    try:
+        supabase.table("folders_table").insert({"name": name, "owner_email": user_email}).execute()
+        return True
+    except: return False
+
+def delete_folder(folder_id):
+    """Delete a folder (jobs inside will have folder_id set to NULL automatically via SQL)"""
+    try:
+        supabase.table("folders_table").delete().eq("id", folder_id).execute()
+        return True
+    except: return False
+
+def rename_folder(folder_id, new_name):
+    """Rename an existing folder"""
+    try:
+        supabase.table("folders_table").update({"name": new_name}).eq("id", folder_id).execute()
+        return True
+    except: return False
+
+def move_job_to_folder(job_id, folder_id):
+    """Assign a job to a folder (or remove it if folder_id is None)"""
+    try:
+        fid = folder_id if folder_id and folder_id > 0 else None
+        supabase.table("jobs_table").update({"folder_id": fid}).eq("id", job_id).execute()
+        return True
+    except: return False
 
 # =============================================================================
 # BUSINESS LOGIC
@@ -163,11 +204,12 @@ def run_mro_app():
         st.info("👋 Welcome! Please import a file to activate the tools.")
         return
 
-    # --- TABS DISPLAY ---
-    tab_visu, tab_plan = st.tabs(["📊 Visualization", "📅 Planning & Delivery"])
+    # --- TABS DISPLAY (UPDATED WITH FOLDERS) ---
+    tab_visu, tab_schedule, tab_folders = st.tabs(["📊 Visualization", "📅 Schedule", "📁 Folders"])
 
     # --- TAB 1: VISUALIZATION ---
     with tab_visu:
+        # 1. Configuration (Expander)
         with st.expander("⚙️ Filter & Column Configuration", expanded=False):
             c1, c2, c3 = st.columns([1, 1, 2])
             cols_date = [c for c in df_raw.columns if 'date' in c.lower()]
@@ -175,22 +217,33 @@ def run_mro_app():
             
             date_col = c1.selectbox("Reference Date Column", df_raw.columns, index=list(df_raw.columns).index(default_date))
             master_filter_cols = c2.multiselect("Define Master Filters", [c for c in df_raw.columns if c != date_col])
-            displayed_columns = c3.multiselect("Columns to Display", options=df_raw.columns, default=list(df_raw.columns))
-
-        # --- HEADER FILTERS + RESET BUTTON ---
-        c_title, c_reset = st.columns([4, 1])
-        
-        with c_title:
-            st.markdown("##### 🔍 Master Filters")
             
-        with c_reset:
-            # Logic to clear dynamic filters
-            if st.button("🔄 Reset Filters", use_container_width=True):
-                for key in list(st.session_state.keys()):
-                    if key.startswith("dyn_"):
-                        del st.session_state[key]
-                st.rerun()
+            # Select All Logic (From previous step)
+            all_cols = list(df_raw.columns)
+            display_opts = ["(Select All)"] + all_cols
+            user_selection = c3.multiselect("Columns to Display", options=display_opts, default=all_cols)
+            
+            if "(Select All)" in user_selection:
+                displayed_columns = all_cols
+            else:
+                displayed_columns = user_selection
 
+        # 2. Reset Function
+        def reset_all_filters():
+            for key in list(st.session_state.keys()):
+                if key.startswith("dyn_"):
+                    del st.session_state[key]
+            if "period_radio" in st.session_state:
+                del st.session_state["period_radio"]
+
+        # 3. Header & Reset Button
+        col_title, col_reset = st.columns([4, 1])
+        with col_title:
+            st.markdown("##### 🔍 Master Filters")
+        with col_reset:
+            st.button("🔄 Reset Filters", on_click=reset_all_filters, use_container_width=True)
+
+        # 4. Filters Calculation
         df_final = df_raw.copy()
         current_filters_config = {}
 
@@ -199,17 +252,25 @@ def run_mro_app():
             for i, col_name in enumerate(master_filter_cols):
                 val_counts = df_final[col_name].astype(str).value_counts()
                 options = ["ALL"] + [f"{val} ({count})" for val, count in val_counts.items()]
+                
                 selected = filt_cols[i].selectbox(f"{col_name}", options, key=f"dyn_{col_name}")
+                
                 if selected != "ALL":
                     clean_val = selected.rpartition(' (')[0]
                     df_final = df_final[df_final[col_name].astype(str) == clean_val]
                     current_filters_config[col_name] = clean_val
         
         st.markdown("---")
+        
+        # 5. Period & Display
         c_time, c_kpi = st.columns([2, 1])
         with c_time:
-            # --- UPDATE: 60 and 180 Days added ---
-            period = st.radio("Period:", ["View All", "7 Days", "30 Days", "60 Days", "180 Days"], horizontal=True)
+            period = st.radio(
+                "Period:", 
+                ["View All", "7 Days", "30 Days", "60 Days", "180 Days"], 
+                horizontal=True,
+                key="period_radio"
+            )
             days_map = {"View All": 0, "7 Days": 7, "30 Days": 30, "60 Days": 60, "180 Days": 180}
             days = days_map[period]
             df_final = filter_date(df_final, date_col, days)
@@ -222,8 +283,14 @@ def run_mro_app():
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
         st.session_state['active_filters'] = current_filters_config
 
-    # --- TAB 2: PLANNING ---
-    with tab_plan:
+    # --- TAB 2: SCHEDULE (Renamed from Planning) ---
+    with tab_schedule:
+        # Load folders for the dropdown
+        folders = get_folders(st.session_state['user_email'])
+        folder_options = {0: "📂 No Folder"} 
+        for f in folders:
+            folder_options[f['id']] = f"📁 {f['name']}"
+
         col_form, col_list = st.columns([1, 1.5])
         
         # --- LEFT COLUMN: NEW REPORT FORM ---
@@ -246,13 +313,20 @@ def run_mro_app():
                     ["Every week", "Every 2 weeks", "Every 4 weeks"]
                 )
                 
+                # --- NEW: Select Initial Folder ---
+                initial_folder = st.selectbox(
+                    "Assign to Folder", 
+                    options=list(folder_options.keys()), 
+                    format_func=lambda x: folder_options[x]
+                )
+
                 days_str = ", ".join(selected_days)
                 final_frequency_str = f"{days_str} ({recurrence})"
                 
                 send_time = st.time_input("Delivery Time", value=time(8, 0))
                 fmt = st.selectbox("Format", ["Excel (.xlsx)", "CSV"])
                 
-                if st.form_submit_button("💾 Save"):
+                if st.form_submit_button("💾 Save Schedule"):
                     if job_name and recipients and selected_days:
                         new_job = {
                             "task_name": job_name,
@@ -262,10 +336,12 @@ def run_mro_app():
                             "format": fmt,
                             "owner_email": st.session_state['user_email'],
                             "filters_config": st.session_state.get('active_filters', {}),
-                            "active": False
+                            "active": False,
+                            # Add folder ID to creation
+                            "folder_id": initial_folder if initial_folder > 0 else None
                         }
                         if add_job(new_job):
-                            st.success("Planning saved!")
+                            st.success("Schedule saved!")
                             st.rerun()
                     else: 
                         st.error("Please fill in the name, emails, and choose at least one day.")
@@ -283,12 +359,19 @@ def run_mro_app():
                     border_class = "border-active" if job['active'] else ""
                     icon_status = "🟢 Active" if job['active'] else "🟠 Inactive"
                     
+                    # Resolve Folder Name
+                    curr_fid = job.get('folder_id')
+                    curr_fid = curr_fid if curr_fid else 0
+                    folder_label = folder_options.get(curr_fid, "📂 No Folder")
+
                     with st.container():
-                        # Card HTML
                         st.markdown(f"""
                         <div class="job-card {border_class}">
                             <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                                <strong style="font-size:1.1em;">{job['task_name']}</strong>
+                                <div>
+                                    <strong style="font-size:1.1em;">{job['task_name']}</strong><br>
+                                    <span style="font-size:0.8em; color:#666;">{folder_label}</span>
+                                </div>
                                 <span>{icon_status}</span>
                             </div>
                             <div class="small-text">
@@ -298,8 +381,6 @@ def run_mro_app():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # --- BUTTONS LAYOUT REORDERED ---
-                        # Left: Action (1.2) | Mid: Filters (2) | Right: Trash (0.8)
                         c_act, c_view, c_del = st.columns([1.2, 2, 0.8])
                         
                         # 1. LEFT: ACTIVATE / STOP
@@ -309,14 +390,31 @@ def run_mro_app():
                                 supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
                                 st.rerun()
 
-                        # 2. MIDDLE: VIEW FILTERS
+                        # 2. MIDDLE: FILTERS & FOLDER MOVE
                         with c_view:
-                            with st.expander("🔍 Filters"):
+                            with st.expander("⚙️ Manage"):
+                                # --- MOVE TO FOLDER LOGIC (Simulates Drag & Drop) ---
+                                st.write("**Move to Folder:**")
+                                new_folder = st.selectbox(
+                                    "Select Folder", 
+                                    options=list(folder_options.keys()), 
+                                    format_func=lambda x: folder_options[x],
+                                    index=list(folder_options.keys()).index(curr_fid) if curr_fid in folder_options else 0,
+                                    key=f"move_{target_id}",
+                                    label_visibility="collapsed"
+                                )
+                                # Auto-save logic
+                                if new_folder != curr_fid:
+                                    if move_job_to_folder(target_id, new_folder):
+                                        st.toast(f"Moved to {folder_options[new_folder]}!")
+                                        st.rerun()
+                                
+                                st.divider()
+                                st.write("**Filters Config:**")
                                 st.json(job['filters_config'])
 
                         # 3. RIGHT: DELETE (TRASH)
                         with c_del:
-                            # Using just the icon for a cleaner look on the right
                             if st.button("🗑️", key=f"del_btn_{target_id}", help="Delete Report"):
                                 res = supabase.table("jobs_table").delete().eq("id", target_id).execute()
                                 if res.data:
@@ -324,6 +422,63 @@ def run_mro_app():
                                     st.rerun()
                                 else:
                                     st.error("Error deleting.")
+
+    # --- TAB 3: FOLDERS (NEW) ---
+    with tab_folders:
+        st.subheader("📂 Folder Management")
+        
+        # 1. Create New Folder
+        with st.form("create_folder"):
+            c_new, c_sub = st.columns([3, 1])
+            new_fname = c_new.text_input("New Folder Name", placeholder="e.g. Monthly Reports, Client A...")
+            if c_sub.form_submit_button("➕ Create Folder"):
+                if new_fname:
+                    if create_folder(new_fname, st.session_state['user_email']):
+                        st.success("Folder created!")
+                        st.rerun()
+        
+        st.markdown("---")
+        
+        # 2. List Folders
+        my_folders = get_folders(st.session_state['user_email'])
+        my_jobs = load_jobs(st.session_state['user_email']) # Need jobs to show content
+
+        if not my_folders:
+            st.info("No folders yet. Create one above!")
+        else:
+            for folder in my_folders:
+                fid = folder['id']
+                fname = folder['name']
+                
+                # Count jobs in this folder
+                jobs_in_folder = [j for j in my_jobs if j.get('folder_id') == fid]
+                count = len(jobs_in_folder)
+                
+                # Folder Card (Expander)
+                with st.expander(f"📁 **{fname}** ({count} reports)", expanded=False):
+                    
+                    # --- RENAME / DELETE SECTION ---
+                    c_ren, c_btn, c_del_f = st.columns([2, 1, 1])
+                    new_name_input = c_ren.text_input("Rename", value=fname, key=f"ren_txt_{fid}", label_visibility="collapsed")
+                    
+                    if c_btn.button("💾 Rename", key=f"ren_btn_{fid}"):
+                        if new_name_input != fname:
+                            rename_folder(fid, new_name_input)
+                            st.rerun()
+                            
+                    if c_del_f.button("🗑️ Delete Folder", key=f"del_fold_{fid}", type="primary"):
+                        delete_folder(fid)
+                        st.rerun()
+                    
+                    st.divider()
+                    
+                    # --- LIST CONTENTS ---
+                    if not jobs_in_folder:
+                        st.caption("Empty folder.")
+                    else:
+                        for j in jobs_in_folder:
+                            st.markdown(f"📄 **{j['task_name']}** - <small>{j['frequency']}</small>", unsafe_allow_html=True)
+
 
 # =============================================================================
 # DATA STORAGE HELPERS
