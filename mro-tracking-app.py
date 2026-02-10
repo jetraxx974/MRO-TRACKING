@@ -295,29 +295,36 @@ def run_mro_app():
         st.session_state['active_filters'] = current_filters_config
 
     # --- VIEW 2: SCHEDULE & EDIT ---
+    # --- VIEW 2: SCHEDULE & EDIT ---
     elif st.session_state['current_view'] == "Schedule & Edit":
         folders = get_folders(st.session_state['user_email'])
         folder_options = {0: "📂 No Folder"} 
         for f in folders: folder_options[f['id']] = f"📁 {f['name']}"
 
-        # COLUMNS: Left (Form) | Right (List)
         col_form, col_list = st.columns([1, 1.4])
         
         # --- LEFT: FORM (STICKY) ---
         with col_form:
+            # BOUTON NEW REPORT (Pour sortir du mode édition)
             if st.button("➕ NEW REPORT", use_container_width=True, type="primary"):
                 st.session_state['edit_mode'] = False
                 st.session_state['edit_job_id'] = None
+                st.session_state['edit_job_data'] = {} # Reset data
                 st.rerun()
 
+            # --- PREPARATION DES DONNEES (LOAD DATA) ---
             if st.session_state['edit_mode']:
                 st.subheader("✏️ Edit Report")
                 edit_data = st.session_state['edit_job_data']
+                
+                # Récupération des valeurs existantes
                 def_name = edit_data.get('task_name', '')
                 def_recip = edit_data.get('recipient', '')
-                def_subj = edit_data.get('email_subject', '') # NEW
+                def_subj = edit_data.get('email_subject', '')
                 def_msg = edit_data.get('custom_message', '')
                 def_hour = datetime.strptime(edit_data.get('hour', '08:00:00'), '%H:%M:%S').time()
+                
+                # Parsing Fréquence
                 old_freq_str = edit_data.get('frequency', '')
                 try:
                     old_days_part = old_freq_str.split('(')[0].strip()
@@ -326,16 +333,56 @@ def run_mro_app():
                     valid_recs = ["Every week", "Every 2 weeks", "Every 4 weeks"]
                     idx_rec = valid_recs.index(old_rec_part) if old_rec_part in valid_recs else 0
                 except: def_days = ["Monday"]; idx_rec = 0
+                
                 def_fid = edit_data.get('folder_id') if edit_data.get('folder_id') else 0
+                
+                # --- LOGIQUE FILTRES (EXISTANTS VS ACTIFS) ---
+                current_saved_filters = edit_data.get('filters_config', {})
             else:
                 st.subheader("🚀 New Report")
                 def_name = ""; def_recip = ""; def_subj = ""; def_msg = ""
                 def_hour = time(8, 0); def_days = ["Monday"]; idx_rec = 0; def_fid = 0
+                # Pour un nouveau rapport, pas de filtres sauvegardés, on prendra ceux par défaut plus bas
+                current_saved_filters = {}
 
+            # --- LE PONT DE FILTRES (IMPORT FEATURE) ---
+            # On récupère les filtres actuellement actifs dans l'onglet Visualisation
+            active_visu_filters = st.session_state.get('active_filters', {})
+            
+            # On stocke temporairement les filtres choisis pour ce formulaire dans session_state
+            # pour qu'ils survivent au rechargement de la page
+            if 'form_filters' not in st.session_state:
+                st.session_state['form_filters'] = current_saved_filters
+
+            with st.expander("⚙️ Filter Import Configuration", expanded=True):
+                c_import_btn, c_preview = st.columns([1, 1])
+                
+                with c_import_btn:
+                    st.caption("Active Filters (Visualization Tab):")
+                    if not active_visu_filters:
+                        st.warning("No active filters in Visu.")
+                    else:
+                        st.json(active_visu_filters, expanded=False)
+                    
+                    # LE BOUTON MAGIQUE
+                    if st.button("📥 Import Active Filters", help="Overwrite report filters with current view", use_container_width=True):
+                        st.session_state['form_filters'] = active_visu_filters
+                        st.toast("Filters imported from Visualization!")
+                        # On met à jour edit_job_data pour que ça persiste visuellement si on est en edit
+                        if st.session_state['edit_mode']:
+                            st.session_state['edit_job_data']['filters_config'] = active_visu_filters
+                        st.rerun()
+
+                with c_preview:
+                    st.caption("Filters applied to this Report:")
+                    # On affiche ce qui sera vraiment sauvegardé
+                    st.json(st.session_state['form_filters'], expanded=False)
+
+
+            # --- LE FORMULAIRE ---
             with st.form("job_form", border=True):
                 job_name = st.text_input("Report Name", value=def_name)
                 recipients = st.text_input("Recipient Emails", value=def_recip)
-                # NEW OBJECT LINE
                 subject = st.text_input("Email Subject", value=def_subj, placeholder="e.g. Weekly KPI Report")
                 
                 st.caption("Custom Message")
@@ -360,19 +407,33 @@ def run_mro_app():
                         else:
                             days_str = ", ".join(selected_days)
                             final_frequency_str = f"{days_str} ({recurrence})"
+                            
+                            # ON UTILISE LES FILTRES DU PONT (session_state['form_filters'])
+                            final_filters_to_save = st.session_state.get('form_filters', {})
+
                             job_payload = {
                                 "task_name": job_name, "recipient": recipients, 
                                 "email_subject": subject, "custom_message": custom_msg,
                                 "frequency": final_frequency_str, "hour": str(send_time), "format": fmt,
-                                "folder_id": initial_folder if initial_folder > 0 else None
+                                "folder_id": initial_folder if initial_folder > 0 else None,
+                                "filters_config": final_filters_to_save # ICI ON SAUVEGARDE LES FILTRES IMPORTÉS
                             }
                             
                             if not st.session_state['edit_mode']:
-                                job_payload.update({"owner_email": st.session_state['user_email'], "filters_config": st.session_state.get('active_filters', {}), "active": False})
-                                if add_job(job_payload): st.success("Saved!"); st.rerun() # Rerun clears form
+                                job_payload.update({"owner_email": st.session_state['user_email'], "active": False})
+                                if add_job(job_payload): 
+                                    st.success("Saved!")
+                                    # Reset des filtres temporaires après save
+                                    st.session_state['form_filters'] = {}
+                                    st.rerun()
                             else:
                                 if update_job(st.session_state['edit_job_id'], job_payload):
-                                    st.success("Updated!"); st.session_state['edit_mode'] = False; st.session_state['edit_job_id'] = None; st.rerun()
+                                    st.success("Updated!")
+                                    st.session_state['edit_mode'] = False
+                                    st.session_state['edit_job_id'] = None
+                                    # Reset des filtres temporaires après update
+                                    st.session_state['form_filters'] = {}
+                                    st.rerun()
                     else: st.error("Fill mandatory fields.")
 
         # --- RIGHT: LIST ---
@@ -383,7 +444,6 @@ def run_mro_app():
 
             my_jobs = load_jobs(st.session_state['user_email'])
             
-            # Filter search
             if search_sched:
                 my_jobs = [j for j in my_jobs if search_sched.lower() in j['task_name'].lower()]
 
@@ -398,8 +458,6 @@ def run_mro_app():
 
                     with st.container():
                         st.markdown(f"""<div class="job-card {border_class}"></div>""", unsafe_allow_html=True)
-                        
-                        # Compact Layout
                         c_info, c_btns = st.columns([2.5, 1.2])
                         
                         with c_info:
@@ -407,22 +465,20 @@ def run_mro_app():
                             st.markdown(f"<div class='small-text'>{folder_label} | {job['frequency']} @ {job['hour']}<br>📧 {job['recipient']}</div>", unsafe_allow_html=True)
                         
                         with c_btns:
-                            # 1. RUN/STOP
                             btn_icon = "⏸️" if is_active else "▶️"
-                            # If active, button is primary style, else secondary
                             if st.button(btn_icon, key=f"tog_{target_id}", help="Run/Pause", use_container_width=True):
                                 supabase.table("jobs_table").update({"active": not is_active}).eq("id", target_id).execute()
                                 st.rerun()
                             
-                            # Row for actions
                             b_edit, b_filt, b_del = st.columns(3)
                             
                             with b_edit:
-                                # Disabled if active
-                                if st.button("✏️", key=f"edt_{target_id}", disabled=is_active, help="Edit (Pause first)"):
+                                if st.button("✏️", key=f"edt_{target_id}", disabled=is_active, help="Edit"):
                                     st.session_state['edit_mode'] = True
                                     st.session_state['edit_job_id'] = target_id
                                     st.session_state['edit_job_data'] = job
+                                    # ON CHARGE LES FILTRES EXISTANTS DU JOB DANS LE STATE POUR L'AFFICHAGE
+                                    st.session_state['form_filters'] = job.get('filters_config', {})
                                     st.rerun()
                                     
                             with b_filt:
@@ -431,7 +487,6 @@ def run_mro_app():
                                     st.json(job['filters_config'])
                                     
                             with b_del:
-                                # Disabled if active
                                 with st.popover("🗑️", disabled=is_active):
                                     st.write("Sure?")
                                     if st.button("YES", key=f"conf_del_{target_id}", type="primary"):
