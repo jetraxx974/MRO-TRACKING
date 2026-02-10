@@ -16,40 +16,40 @@ except Exception as e:
     st.error("❌ Supabase connection error. Check your 'Secrets' in Streamlit Cloud.")
     st.stop()
 
-# --- CSS (OPTIMIZED COMPACT DESIGN & STICKY) ---
+# --- CSS (UPDATED DESIGN & STICKY) ---
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem;}
     
-    /* CARTES COMPACTES */
+    /* CARTES : Bordure complète colorée */
     .job-card {
-        padding: 8px 12px; /* Reduced padding */
-        border-radius: 6px; 
-        margin-bottom: 6px; 
+        padding: 10px 14px; 
+        border-radius: 8px; 
+        margin-bottom: 8px; 
         background-color: rgba(255, 255, 255, 0.05) !important; 
-        border: 1px solid #FFCC80; 
-        font-size: 0.9rem;
+        border: 2px solid #FFCC80; /* Orange par défaut (Inactif) */
+        transition: all 0.2s ease;
     }
     
-    .border-active {
-        border: 1px solid #2ECC71 !important;
+    /* Classe spécifique pour Actif (Vert) */
+    .job-card-active {
+        border: 2px solid #2ECC71 !important; /* Vert complet */
         background-color: rgba(46, 204, 113, 0.05) !important;
     }
 
-    /* COMPACT TEXT */
     .small-text {
-        font-size: 0.75rem !important; 
-        opacity: 0.8;
-        line-height: 1.2;
+        font-size: 0.8rem !important; 
+        opacity: 0.9;
+        line-height: 1.4;
     }
     
     /* BOUTONS ULTRA COMPACTS */
     div[data-testid="column"] .stButton button {
         border-radius: 4px;
-        padding: 0px 5px;
+        padding: 0px 8px;
         font-size: 0.8rem;
-        height: 28px;
-        min-height: 28px;
+        height: 30px;
+        min-height: 30px;
     }
 
     /* NAVIGATION */
@@ -58,17 +58,17 @@ st.markdown("""
         margin-bottom: 10px;
     }
 
-    /* --- LOGIQUE STICKY INTELLIGENTE --- */
-    /* La colonne de gauche (Formulaire) reste fixe mais scrollable si trop grande */
+    /* STICKY COLUMN GAUCHE */
     div[data-testid="stHorizontalBlock"] > div:nth-child(1) {
         position: sticky;
-        top: 3rem;
-        max-height: 90vh; /* Empêche de sortir de l'écran */
-        overflow-y: auto; /* Permet de scroller DANS la colonne si besoin */
+        top: 3.5rem;
+        max-height: 88vh;
+        overflow-y: auto;
         padding-right: 10px;
+        z-index: 99;
     }
     
-    /* Scrollbar invisible pour le look */
+    /* Scrollbar invisible */
     div[data-testid="stHorizontalBlock"] > div:nth-child(1)::-webkit-scrollbar {
         width: 0px;
         background: transparent;
@@ -192,6 +192,7 @@ def filter_date(df, date_col, days):
 # =============================================================================
 
 def run_mro_app():
+    # --- SESSION STATE ---
     if 'edit_mode' not in st.session_state:
         st.session_state['edit_mode'] = False
         st.session_state['edit_job_id'] = None
@@ -216,8 +217,8 @@ def run_mro_app():
 
     st.title("✈️ MRO Control Tower")
 
-    # --- DATA SOURCE ---
-    with st.expander("📂 Data Source", expanded=True):
+    # --- DATA SOURCE (CLOSED BY DEFAULT) ---
+    with st.expander("📂 Data Source", expanded=False):
         uploaded_file = st.file_uploader("Excel/CSV File", type=['xlsx', 'csv'])
 
     df_raw = None
@@ -244,23 +245,36 @@ def run_mro_app():
 
     # --- VIEW 1: VISUALIZATION ---
     if st.session_state['current_view'] == "Visualization":
-        with st.expander("⚙️ Filter & Column Configuration", expanded=False):
+        with st.expander("⚙️ Filter & Column Configuration", expanded=True):
             c1, c2, c3 = st.columns([1, 1, 2])
             cols_date = [c for c in df_raw.columns if 'date' in c.lower()]
             default_date = cols_date[0] if cols_date else df_raw.columns[0]
             date_col = c1.selectbox("Reference Date Column", df_raw.columns, index=list(df_raw.columns).index(default_date))
+            
             master_filter_cols = c2.multiselect("Define Master Filters", [c for c in df_raw.columns if c != date_col], key="master_cols_select")
+            
             all_cols = list(df_raw.columns)
             display_opts = ["(Select All)"] + all_cols
-            user_selection = c3.multiselect("Columns to Display", options=display_opts, default=all_cols)
+            # KEY ADDED FOR PERSISTENCE
+            user_selection = c3.multiselect("Columns to Display", options=display_opts, default=all_cols, key="visu_columns_select")
+            
             if "(Select All)" in user_selection: displayed_columns = all_cols
             else: displayed_columns = user_selection
 
+        # --- CUSTOM CODE FILTER ---
+        with st.expander("🧑‍💻 Advanced Filter (Python/SQL)"):
+            st.caption("Write a Pandas query string (e.g. `Status == 'Open' and Age > 10`). Leave empty to ignore.")
+            # KEY ADDED FOR PERSISTENCE
+            custom_query = st.text_area("Custom Code", height=70, key="visu_custom_code")
+
+        # Reset Function
         def reset_all_filters():
             for key in list(st.session_state.keys()):
                 if key.startswith("dyn_"): del st.session_state[key]
             if "period_radio" in st.session_state: del st.session_state["period_radio"]
             if "master_cols_select" in st.session_state: del st.session_state["master_cols_select"]
+            if "visu_columns_select" in st.session_state: del st.session_state["visu_columns_select"]
+            if "visu_custom_code" in st.session_state: del st.session_state["visu_custom_code"]
 
         col_title, col_reset = st.columns([4, 1])
         with col_title: st.markdown("##### 🔍 Master Filters")
@@ -281,6 +295,15 @@ def run_mro_app():
                     current_filters_config[col_name] = selected_clean
 
         st.markdown("---")
+        
+        # APPLY CUSTOM CODE FILTER
+        if custom_query:
+            try:
+                df_final = df_final.query(custom_query)
+                current_filters_config['custom_code'] = custom_query
+            except Exception as e:
+                st.error(f"⚠️ Syntax Error in Custom Code: {e}")
+
         c_time, c_kpi = st.columns([2, 1])
         with c_time:
             period = st.radio("Period:", ["View All", "7 Days", "30 Days", "60 Days", "180 Days"], horizontal=True, key="period_radio")
@@ -289,12 +312,16 @@ def run_mro_app():
             df_final = filter_date(df_final, date_col, days)
             current_filters_config["retention_days"] = days
             current_filters_config["date_column"] = date_col
+            
+            # SAVE DISPLAYED COLUMNS IN CONFIG
+            current_filters_config["display_columns"] = displayed_columns
 
         with c_kpi: st.metric("Displayed Rows", len(df_final), delta=f"out of {len(df_raw)} total")
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
+        
+        # SAVE GLOBAL STATE FOR OTHER TABS
         st.session_state['active_filters'] = current_filters_config
 
-    # --- VIEW 2: SCHEDULE & EDIT ---
     # --- VIEW 2: SCHEDULE & EDIT ---
     elif st.session_state['current_view'] == "Schedule & Edit":
         folders = get_folders(st.session_state['user_email'])
@@ -305,26 +332,21 @@ def run_mro_app():
         
         # --- LEFT: FORM (STICKY) ---
         with col_form:
-            # BOUTON NEW REPORT (Pour sortir du mode édition)
-            if st.button("➕ NEW REPORT", use_container_width=True, type="primary"):
+            # NEW BUTTON NEUTRAL (SECONDARY)
+            if st.button("➕ NEW REPORT", use_container_width=True):
                 st.session_state['edit_mode'] = False
                 st.session_state['edit_job_id'] = None
-                st.session_state['edit_job_data'] = {} # Reset data
+                st.session_state['edit_job_data'] = {} 
                 st.rerun()
 
-            # --- PREPARATION DES DONNEES (LOAD DATA) ---
             if st.session_state['edit_mode']:
                 st.subheader("✏️ Edit Report")
                 edit_data = st.session_state['edit_job_data']
-                
-                # Récupération des valeurs existantes
                 def_name = edit_data.get('task_name', '')
                 def_recip = edit_data.get('recipient', '')
                 def_subj = edit_data.get('email_subject', '')
                 def_msg = edit_data.get('custom_message', '')
                 def_hour = datetime.strptime(edit_data.get('hour', '08:00:00'), '%H:%M:%S').time()
-                
-                # Parsing Fréquence
                 old_freq_str = edit_data.get('frequency', '')
                 try:
                     old_days_part = old_freq_str.split('(')[0].strip()
@@ -333,66 +355,43 @@ def run_mro_app():
                     valid_recs = ["Every week", "Every 2 weeks", "Every 4 weeks"]
                     idx_rec = valid_recs.index(old_rec_part) if old_rec_part in valid_recs else 0
                 except: def_days = ["Monday"]; idx_rec = 0
-                
                 def_fid = edit_data.get('folder_id') if edit_data.get('folder_id') else 0
-                
-                # --- LOGIQUE FILTRES (EXISTANTS VS ACTIFS) ---
                 current_saved_filters = edit_data.get('filters_config', {})
             else:
                 st.subheader("🚀 New Report")
                 def_name = ""; def_recip = ""; def_subj = ""; def_msg = ""
                 def_hour = time(8, 0); def_days = ["Monday"]; idx_rec = 0; def_fid = 0
-                # Pour un nouveau rapport, pas de filtres sauvegardés, on prendra ceux par défaut plus bas
                 current_saved_filters = {}
 
-            # --- LE PONT DE FILTRES (IMPORT FEATURE) ---
-            # On récupère les filtres actuellement actifs dans l'onglet Visualisation
+            # --- FILTER BRIDGE ---
             active_visu_filters = st.session_state.get('active_filters', {})
-            
-            # On stocke temporairement les filtres choisis pour ce formulaire dans session_state
-            # pour qu'ils survivent au rechargement de la page
-            if 'form_filters' not in st.session_state:
-                st.session_state['form_filters'] = current_saved_filters
+            if 'form_filters' not in st.session_state: st.session_state['form_filters'] = current_saved_filters
 
             with st.expander("⚙️ Filter Import Configuration", expanded=True):
                 c_import_btn, c_preview = st.columns([1, 1])
-                
                 with c_import_btn:
-                    st.caption("Active Filters (Visualization Tab):")
-                    if not active_visu_filters:
-                        st.warning("No active filters in Visu.")
-                    else:
-                        st.json(active_visu_filters, expanded=False)
-                    
-                    # LE BOUTON MAGIQUE
-                    if st.button("📥 Import Active Filters", help="Overwrite report filters with current view", use_container_width=True):
+                    if st.button("📥 Import Active Filters", use_container_width=True):
+                        # Import ALL filters including columns and code
                         st.session_state['form_filters'] = active_visu_filters
-                        st.toast("Filters imported from Visualization!")
-                        # On met à jour edit_job_data pour que ça persiste visuellement si on est en edit
+                        st.toast("Filters & Columns imported!")
                         if st.session_state['edit_mode']:
                             st.session_state['edit_job_data']['filters_config'] = active_visu_filters
                         st.rerun()
-
                 with c_preview:
-                    st.caption("Filters applied to this Report:")
-                    # On affiche ce qui sera vraiment sauvegardé
+                    st.caption("Config Preview:")
                     st.json(st.session_state['form_filters'], expanded=False)
 
-
-            # --- LE FORMULAIRE ---
+            # --- FORM ---
             with st.form("job_form", border=True):
                 job_name = st.text_input("Report Name", value=def_name)
                 recipients = st.text_input("Recipient Emails", value=def_recip)
                 subject = st.text_input("Email Subject", value=def_subj, placeholder="e.g. Weekly KPI Report")
-                
                 st.caption("Custom Message")
                 custom_msg = st.text_area("Message", value=def_msg, height=80, max_chars=2000)
-                
                 st.write("**Delivery Configuration**")
                 selected_days = st.multiselect("Days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], default=def_days)
                 recurrence = st.selectbox("Interval", ["Every week", "Every 2 weeks", "Every 4 weeks"], index=idx_rec)
                 initial_folder = st.selectbox("Folder", options=list(folder_options.keys()), format_func=lambda x: folder_options[x], index=list(folder_options.keys()).index(def_fid) if def_fid in folder_options else 0)
-
                 c_time, c_fmt = st.columns(2)
                 send_time = c_time.time_input("Time", value=def_hour)
                 fmt = c_fmt.selectbox("Format", ["Excel (.xlsx)", "CSV"])
@@ -407,8 +406,6 @@ def run_mro_app():
                         else:
                             days_str = ", ".join(selected_days)
                             final_frequency_str = f"{days_str} ({recurrence})"
-                            
-                            # ON UTILISE LES FILTRES DU PONT (session_state['form_filters'])
                             final_filters_to_save = st.session_state.get('form_filters', {})
 
                             job_payload = {
@@ -416,14 +413,13 @@ def run_mro_app():
                                 "email_subject": subject, "custom_message": custom_msg,
                                 "frequency": final_frequency_str, "hour": str(send_time), "format": fmt,
                                 "folder_id": initial_folder if initial_folder > 0 else None,
-                                "filters_config": final_filters_to_save # ICI ON SAUVEGARDE LES FILTRES IMPORTÉS
+                                "filters_config": final_filters_to_save 
                             }
                             
                             if not st.session_state['edit_mode']:
                                 job_payload.update({"owner_email": st.session_state['user_email'], "active": False})
                                 if add_job(job_payload): 
                                     st.success("Saved!")
-                                    # Reset des filtres temporaires après save
                                     st.session_state['form_filters'] = {}
                                     st.rerun()
                             else:
@@ -431,7 +427,6 @@ def run_mro_app():
                                     st.success("Updated!")
                                     st.session_state['edit_mode'] = False
                                     st.session_state['edit_job_id'] = None
-                                    # Reset des filtres temporaires après update
                                     st.session_state['form_filters'] = {}
                                     st.rerun()
                     else: st.error("Fill mandatory fields.")
@@ -440,7 +435,9 @@ def run_mro_app():
         with col_list:
             c_head, c_search = st.columns([1, 1])
             with c_head: st.subheader("📋 Scheduled")
-            with c_search: search_sched = st.text_input("🔍 Search reports", label_visibility="collapsed")
+            with c_search: 
+                # LIVE SEARCH
+                search_sched = st.text_input("🔍 Search reports", label_visibility="collapsed", placeholder="Search...")
 
             my_jobs = load_jobs(st.session_state['user_email'])
             
@@ -452,12 +449,13 @@ def run_mro_app():
                 for job in my_jobs:
                     target_id = int(job['id'])
                     is_active = job['active']
-                    border_class = "border-active" if is_active else ""
+                    # CLASS CSS DYNAMIQUE (BORDURE)
+                    card_class = "job-card-active" if is_active else "job-card"
                     icon_status = "🟢" if is_active else "🟠"
                     folder_label = folder_options.get(job.get('folder_id', 0) or 0, "No Folder")
 
                     with st.container():
-                        st.markdown(f"""<div class="job-card {border_class}"></div>""", unsafe_allow_html=True)
+                        st.markdown(f"""<div class="{card_class}"></div>""", unsafe_allow_html=True)
                         c_info, c_btns = st.columns([2.5, 1.2])
                         
                         with c_info:
@@ -465,19 +463,20 @@ def run_mro_app():
                             st.markdown(f"<div class='small-text'>{folder_label} | {job['frequency']} @ {job['hour']}<br>📧 {job['recipient']}</div>", unsafe_allow_html=True)
                         
                         with c_btns:
+                            # RUN/STOP
                             btn_icon = "⏸️" if is_active else "▶️"
-                            if st.button(btn_icon, key=f"tog_{target_id}", help="Run/Pause", use_container_width=True):
+                            if st.button(btn_icon, key=f"tog_{target_id}", use_container_width=True): # Removed help
                                 supabase.table("jobs_table").update({"active": not is_active}).eq("id", target_id).execute()
                                 st.rerun()
                             
                             b_edit, b_filt, b_del = st.columns(3)
                             
                             with b_edit:
-                                if st.button("✏️", key=f"edt_{target_id}", disabled=is_active, help="Edit"):
+                                # Disabled if active
+                                if st.button("✏️", key=f"edt_{target_id}", disabled=is_active): # Removed help
                                     st.session_state['edit_mode'] = True
                                     st.session_state['edit_job_id'] = target_id
                                     st.session_state['edit_job_data'] = job
-                                    # ON CHARGE LES FILTRES EXISTANTS DU JOB DANS LE STATE POUR L'AFFICHAGE
                                     st.session_state['form_filters'] = job.get('filters_config', {})
                                     st.rerun()
                                     
@@ -487,12 +486,11 @@ def run_mro_app():
                                     st.json(job['filters_config'])
                                     
                             with b_del:
-                                with st.popover("🗑️", disabled=is_active):
+                                with st.popover("🗑️", disabled=is_active): # Removed help
                                     st.write("Sure?")
                                     if st.button("YES", key=f"conf_del_{target_id}", type="primary"):
                                         supabase.table("jobs_table").delete().eq("id", target_id).execute()
                                         st.rerun()
-                        
                         st.divider()
 
     # --- VIEW 3: FOLDERS ---
@@ -554,6 +552,7 @@ def run_mro_app():
                             st.session_state['edit_mode'] = True
                             st.session_state['edit_job_id'] = jid
                             st.session_state['edit_job_data'] = j
+                            st.session_state['form_filters'] = j.get('filters_config', {})
                             st.session_state['current_view'] = "Schedule & Edit"
                             st.rerun()
 
