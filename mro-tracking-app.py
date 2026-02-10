@@ -177,7 +177,20 @@ def run_mro_app():
             master_filter_cols = c2.multiselect("Define Master Filters", [c for c in df_raw.columns if c != date_col])
             displayed_columns = c3.multiselect("Columns to Display", options=df_raw.columns, default=list(df_raw.columns))
 
-        st.markdown("##### 🔍 Master Filters")
+        # --- HEADER FILTERS + RESET BUTTON ---
+        c_title, c_reset = st.columns([4, 1])
+        
+        with c_title:
+            st.markdown("##### 🔍 Master Filters")
+            
+        with c_reset:
+            # Logic to clear dynamic filters
+            if st.button("🔄 Reset Filters", use_container_width=True):
+                for key in list(st.session_state.keys()):
+                    if key.startswith("dyn_"):
+                        del st.session_state[key]
+                st.rerun()
+
         df_final = df_raw.copy()
         current_filters_config = {}
 
@@ -195,8 +208,9 @@ def run_mro_app():
         st.markdown("---")
         c_time, c_kpi = st.columns([2, 1])
         with c_time:
-            period = st.radio("Period:", ["View All", "7 Days", "30 Days", "90 Days"], horizontal=True)
-            days_map = {"View All": 0, "7 Days": 7, "30 Days": 30, "90 Days": 90}
+            # --- UPDATE: 60 and 180 Days added ---
+            period = st.radio("Period:", ["View All", "7 Days", "30 Days", "60 Days", "180 Days"], horizontal=True)
+            days_map = {"View All": 0, "7 Days": 7, "30 Days": 30, "60 Days": 60, "180 Days": 180}
             days = days_map[period]
             df_final = filter_date(df_final, date_col, days)
             current_filters_config["retention_days"] = days
@@ -212,6 +226,7 @@ def run_mro_app():
     with tab_plan:
         col_form, col_list = st.columns([1, 1.5])
         
+        # --- LEFT COLUMN: NEW REPORT FORM ---
         with col_form:
             st.subheader("🚀 New Report")
             with st.form("new_job_form"):
@@ -255,6 +270,7 @@ def run_mro_app():
                     else: 
                         st.error("Please fill in the name, emails, and choose at least one day.")
 
+        # --- RIGHT COLUMN: SCHEDULED REPORTS LIST ---
         with col_list:
             st.subheader("📋 My Scheduled Reports")
             my_jobs = load_jobs(st.session_state['user_email'])
@@ -268,6 +284,7 @@ def run_mro_app():
                     icon_status = "🟢 Active" if job['active'] else "🟠 Inactive"
                     
                     with st.container():
+                        # Card HTML
                         st.markdown(f"""
                         <div class="job-card {border_class}">
                             <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
@@ -281,23 +298,32 @@ def run_mro_app():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        c1, c2, c3 = st.columns([1, 1, 1])
+                        # --- BUTTONS LAYOUT REORDERED ---
+                        # Left: Action (1.2) | Mid: Filters (2) | Right: Trash (0.8)
+                        c_act, c_view, c_del = st.columns([1.2, 2, 0.8])
                         
-                        if c1.button("🗑️ Delete", key=f"del_btn_{target_id}"):
-                            res = supabase.table("jobs_table").delete().eq("id", target_id).execute()
-                            if res.data:
-                                st.success("Deleted!")
+                        # 1. LEFT: ACTIVATE / STOP
+                        with c_act:
+                            btn_label = "⏸️ Stop" if job['active'] else "▶️ Run"
+                            if st.button(btn_label, key=f"tog_btn_{target_id}"):
+                                supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
                                 st.rerun()
-                            else:
-                                st.error(f"Cannot delete ID {target_id}. Check Supabase Policies.")
-                        
-                        btn_label = "⏸️ Stop" if job['active'] else "▶️ Activate"
-                        if c2.button(btn_label, key=f"tog_btn_{target_id}"):
-                            supabase.table("jobs_table").update({"active": not job['active']}).eq("id", target_id).execute()
-                            st.rerun()
 
-                        with c3.expander("🔍 View Filters"):
-                            st.json(job['filters_config'])
+                        # 2. MIDDLE: VIEW FILTERS
+                        with c_view:
+                            with st.expander("🔍 Filters"):
+                                st.json(job['filters_config'])
+
+                        # 3. RIGHT: DELETE (TRASH)
+                        with c_del:
+                            # Using just the icon for a cleaner look on the right
+                            if st.button("🗑️", key=f"del_btn_{target_id}", help="Delete Report"):
+                                res = supabase.table("jobs_table").delete().eq("id", target_id).execute()
+                                if res.data:
+                                    st.success("Deleted!")
+                                    st.rerun()
+                                else:
+                                    st.error("Error deleting.")
 
 # =============================================================================
 # DATA STORAGE HELPERS
