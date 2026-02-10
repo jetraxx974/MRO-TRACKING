@@ -35,6 +35,17 @@ st.markdown("""
         border: 2px solid #2ECC71 !important; 
         background-color: rgba(46, 204, 113, 0.05) !important;
     }
+    
+    /* ANIMATION CLIGNOTANTE (Ping) POUR L'ENREGISTREMENT */
+    @keyframes blink-border-anim {
+        0% { border-color: #3498DB; box-shadow: 0 0 5px #3498DB; }
+        50% { border-color: #fff; box-shadow: 0 0 15px #fff; }
+        100% { border-color: #3498DB; box-shadow: 0 0 5px #3498DB; }
+    }
+    .job-card-blink {
+        border: 2px solid #3498DB !important;
+        animation: blink-border-anim 1s infinite;
+    }
 
     /* TEXTE & BOUTONS */
     .small-text { font-size: 0.8rem !important; opacity: 0.9; line-height: 1.4; }
@@ -51,7 +62,7 @@ st.markdown("""
     }
     div[data-testid="stHorizontalBlock"] > div:nth-child(1)::-webkit-scrollbar { width: 0px; background: transparent; }
 
-    /* ANIMATION CLIGNOTANTE (Ping) */
+    /* FLASH SUCCESS TEXT */
     @keyframes blink-green {
         0% { opacity: 0.2; color: #2ECC71; }
         50% { opacity: 1; color: #2ECC71; font-weight: bold; transform: scale(1.1); }
@@ -107,7 +118,9 @@ def check_duplicate_name(task_name, user_email, exclude_id=None):
 def add_job(job_data):
     try:
         job_data.pop('id', None) 
-        supabase.table("jobs_table").insert(job_data).execute()
+        res = supabase.table("jobs_table").insert(job_data).execute()
+        if res.data:
+            return res.data[0]['id'] # Return ID for blinking
         return True
     except: return False
 
@@ -152,39 +165,45 @@ def move_job_to_folder(job_id, folder_id):
     except: return False
 
 # =============================================================================
-# EXPORT ENGINE (NEW)
+# EXPORT ENGINE (FIXED)
 # =============================================================================
 def generate_report_file(df_raw, job_config):
-    """Reconstructs the file exactly as the report would generate it."""
+    """Reconstructs the file using FULL source data + Filters."""
     try:
+        # Important: work on a copy to not impact the cache
         df = df_raw.copy()
-        filters = job_config.get('filters_config', {})
         
-        # 1. Master Filters
+        # Load config
+        filters = job_config.get('filters_config', {})
+        if filters is None: filters = {} # Security
+        
+        # 1. Master Filters (Dynamic columns)
         for col, selected_vals in filters.items():
+            # Skip reserved keys and check if column still exists in current source file
             if col not in ["retention_days", "date_column", "display_columns", "custom_code"] and col in df.columns:
-                # Handle single value or list
                 if isinstance(selected_vals, list):
-                    df = df[df[col].astype(str).isin(selected_vals)]
+                    if selected_vals: # Only filter if list is not empty
+                        df = df[df[col].astype(str).isin(selected_vals)]
                 else:
-                    df = df[df[col].astype(str) == selected_vals]
+                    if selected_vals and selected_vals != "ALL":
+                        df = df[df[col].astype(str) == selected_vals]
 
         # 2. Date Filter
         days = filters.get("retention_days", 0)
         date_col = filters.get("date_column")
-        if days > 0 and date_col and date_col in df.columns:
+        if days and days > 0 and date_col and date_col in df.columns:
              df = filter_date(df, date_col, days)
              
         # 3. Custom Code
         code = filters.get("custom_code")
         if code:
             try: df = df.query(code)
-            except: pass
+            except: pass # Ignore if code fails
             
-        # 4. Columns
+        # 4. Columns Selection
         cols = filters.get("display_columns")
         if cols:
-            # Only keep columns that still exist
+            # Only keep columns that still exist in the new file
             valid_cols = [c for c in cols if c in df.columns]
             if valid_cols: df = df[valid_cols]
 
@@ -197,6 +216,7 @@ def generate_report_file(df_raw, job_config):
             mime = "text/csv"
             ext = ".csv"
         else:
+            # Engine xlsxwriter is required
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Report')
             mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -205,7 +225,8 @@ def generate_report_file(df_raw, job_config):
         output.seek(0)
         return output, mime, ext
     except Exception as e:
-        return None, None, None
+        # Return the error as a string to display it
+        return None, str(e), None
 
 # =============================================================================
 # BUSINESS LOGIC
@@ -247,12 +268,14 @@ def run_mro_app():
     if 'current_view' not in st.session_state:
         st.session_state['current_view'] = "Visualization"
 
+    # State for Blinking Effect (ID of the modified job)
+    if 'last_updated_id' not in st.session_state:
+        st.session_state['last_updated_id'] = None
+
     # --- PERSISTENCE STATE INIT (FOR VISUALIZATION) ---
-    # We explicitly initialize these to ensure they survive view changes
     if 'visu_saved_master_cols' not in st.session_state: st.session_state['visu_saved_master_cols'] = []
     if 'visu_saved_period' not in st.session_state: st.session_state['visu_saved_period'] = "View All"
     if 'visu_saved_custom_code' not in st.session_state: st.session_state['visu_saved_custom_code'] = ""
-    # Note: 'visu_saved_display_cols' is initialized after data load because it depends on df columns
     
     # --- SIDEBAR ---
     with st.sidebar:
@@ -308,7 +331,6 @@ def run_mro_app():
             default_date = cols_date[0] if cols_date else df_raw.columns[0]
             date_col = c1.selectbox("Reference Date Column", df_raw.columns, index=list(df_raw.columns).index(default_date))
             
-            # Use Session State for Default to ensure persistence
             master_filter_cols = c2.multiselect(
                 "Define Master Filters", 
                 [c for c in df_raw.columns if c != date_col], 
@@ -319,7 +341,6 @@ def run_mro_app():
             all_cols = list(df_raw.columns)
             display_opts = ["(Select All)"] + all_cols
             
-            # Logic to handle Select All for UI but persist actual columns
             user_selection = c3.multiselect(
                 "Columns to Display", 
                 options=display_opts, 
@@ -330,22 +351,17 @@ def run_mro_app():
             if "(Select All)" in user_selection: displayed_columns = all_cols
             else: displayed_columns = user_selection
 
-        # --- CUSTOM CODE FILTER ---
         with st.expander("🧑‍💻 Advanced Filter (Python/SQL)"):
-            st.caption("Write a Pandas query string (e.g. `Status == 'Open' and Age > 10`). Leave empty to ignore.")
+            st.caption("Write a Pandas query string (e.g. `Status == 'Open' and Age > 10`).")
             custom_query = st.text_area("Custom Code", value=st.session_state['visu_saved_custom_code'], height=70, key="visu_custom_code")
 
-        # Reset Function (Clears only when clicked)
         def reset_all_filters():
-            # Clear all dynamic keys
             for key in list(st.session_state.keys()):
                 if key.startswith("dyn_"): del st.session_state[key]
-            # Reset persistence states to default
             st.session_state['visu_saved_master_cols'] = []
             st.session_state['visu_saved_period'] = "View All"
             st.session_state['visu_saved_custom_code'] = ""
             st.session_state['visu_saved_display_cols'] = list(df_raw.columns)
-            # Remove widget keys to force reload
             if "master_cols_select" in st.session_state: del st.session_state["master_cols_select"]
             if "visu_columns_select" in st.session_state: del st.session_state["visu_columns_select"]
             if "visu_custom_code" in st.session_state: del st.session_state["visu_custom_code"]
@@ -355,24 +371,20 @@ def run_mro_app():
         with col_title: st.markdown("##### 🔍 Master Filters")
         with col_reset: st.button("🔄 Reset Filters", on_click=reset_all_filters, use_container_width=True)
 
+        # --- FIX SYNCHRO ---
         df_final = df_raw.copy()
         current_filters_config = {}
 
         if master_filter_cols:
             filt_cols = st.columns(len(master_filter_cols))
             for i, col_name in enumerate(master_filter_cols):
-                # Persistence for dynamic widgets is handled by Streamlit keys automatically 
-                # as long as we don't clear them. But if view changes, we need to recover values.
-                # Here we rely on the fact that if we use the same KEY, Streamlit tries to keep it.
-                # But to be safe, we could use session state defaults if we wanted deep persistence.
-                # For now, let's stick to the key system which works if page doesn't fully reload.
-                
                 val_counts = df_final[col_name].astype(str).value_counts()
                 display_options = [f"{val} ({count})" for val, count in val_counts.items()]
                 
-                # Check if we have a saved state for this specific filter
-                # (Simple approach: rely on key persistence)
-                selected_display = filt_cols[i].multiselect(f"{col_name}", display_options, key=f"dyn_{col_name}")
+                # Check session state explicitly to force sync
+                default_vals = st.session_state.get(f"dyn_{col_name}", [])
+                
+                selected_display = filt_cols[i].multiselect(f"{col_name}", display_options, key=f"dyn_{col_name}", default=default_vals)
                 
                 if selected_display:
                     selected_clean = [s.rpartition(' (')[0] for s in selected_display]
@@ -381,7 +393,6 @@ def run_mro_app():
 
         st.markdown("---")
         
-        # APPLY CUSTOM CODE FILTER
         if custom_query:
             try:
                 df_final = df_final.query(custom_query)
@@ -408,13 +419,11 @@ def run_mro_app():
         with c_kpi: st.metric("Displayed Rows", len(df_final), delta=f"out of {len(df_raw)} total")
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
         
-        # SAVE STATE FOR PERSISTENCE WHEN LEAVING TAB
+        # SAVE STATE
         st.session_state['visu_saved_master_cols'] = master_filter_cols
         st.session_state['visu_saved_display_cols'] = displayed_columns
         st.session_state['visu_saved_custom_code'] = custom_query
         st.session_state['visu_saved_period'] = period
-        
-        # SAVE CONFIG FOR EXPORT/IMPORT
         st.session_state['active_filters'] = current_filters_config
 
     # --- VIEW 2: SCHEDULE & EDIT ---
@@ -466,21 +475,15 @@ def run_mro_app():
                 with c_import_btn:
                     if st.button("📥 Import Active Filters", use_container_width=True):
                         st.session_state['form_filters'] = active_visu_filters
-                        # TRIGGER ANIMATION
                         st.session_state['flash_success'] = True
                         if st.session_state['edit_mode']:
                             st.session_state['edit_job_data']['filters_config'] = active_visu_filters
                         st.rerun()
                 with c_preview:
                     label = "Config Preview:"
-                    # Flash Green Logic
                     if st.session_state.get('flash_success'):
                         label += " <span class='flash-success'>●</span>"
-                        # Reset flag after one run is tricky in Streamlit, 
-                        # usually requires a callback or it blinks once per rerun.
-                        # We leave it blinking for this session state until another action.
                         del st.session_state['flash_success']
-                    
                     st.markdown(label, unsafe_allow_html=True)
                     st.json(st.session_state['form_filters'], expanded=False)
 
@@ -488,10 +491,8 @@ def run_mro_app():
             with st.form("job_form", border=True):
                 job_name = st.text_input("Report Name", value=def_name)
                 recipients = st.text_input("Recipient Emails", value=def_recip)
-                st.caption("ℹ️ Use commas to separate multiple emails (e.g. `john@test.com, jane@test.com`)")
-                
+                st.caption("ℹ️ Use commas to separate multiple emails")
                 subject = st.text_input("Email Subject", value=def_subj, placeholder="e.g. Weekly KPI Report")
-                st.caption("Custom Message")
                 custom_msg = st.text_area("Message", value=def_msg, height=80, max_chars=2000)
                 st.write("**Delivery Configuration**")
                 selected_days = st.multiselect("Days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], default=def_days)
@@ -523,11 +524,20 @@ def run_mro_app():
                             
                             if not st.session_state['edit_mode']:
                                 job_payload.update({"owner_email": st.session_state['user_email'], "active": False})
-                                if add_job(job_payload): 
-                                    st.success("Saved!"); st.session_state['form_filters'] = {}; st.rerun()
+                                new_id = add_job(job_payload)
+                                if new_id:
+                                    st.success("Saved!")
+                                    st.session_state['form_filters'] = {}
+                                    st.session_state['last_updated_id'] = new_id
+                                    st.rerun()
                             else:
                                 if update_job(st.session_state['edit_job_id'], job_payload):
-                                    st.success("Updated!"); st.session_state['edit_mode'] = False; st.session_state['edit_job_id'] = None; st.session_state['form_filters'] = {}; st.rerun()
+                                    st.success("Updated!")
+                                    st.session_state['last_updated_id'] = st.session_state['edit_job_id']
+                                    st.session_state['edit_mode'] = False
+                                    st.session_state['edit_job_id'] = None
+                                    st.session_state['form_filters'] = {}
+                                    st.rerun()
                     else: st.error("Fill mandatory fields.")
 
         # --- RIGHT: LIST ---
@@ -547,7 +557,14 @@ def run_mro_app():
                 for job in my_jobs:
                     target_id = int(job['id'])
                     is_active = job['active']
+                    
+                    # Logic for Blinking class
                     card_class = "job-card-active" if is_active else "job-card"
+                    if st.session_state.get('last_updated_id') == target_id:
+                         card_class += " job-card-blink"
+                         # Optionally remove it for next run, but streamit reruns will clear it eventually if we wanted
+                         # Here it keeps blinking until another action.
+
                     icon_status = "🟢" if is_active else "🟠"
                     folder_label = folder_options.get(job.get('folder_id', 0) or 0, "No Folder")
 
@@ -560,13 +577,11 @@ def run_mro_app():
                             st.markdown(f"<div class='small-text'>{folder_label} | {job['frequency']} @ {job['hour']}<br>📧 {job['recipient']}</div>", unsafe_allow_html=True)
                         
                         with c_btns:
-                            # RUN/STOP
                             btn_icon = "⏸️" if is_active else "▶️"
                             if st.button(btn_icon, key=f"tog_{target_id}", use_container_width=True):
                                 supabase.table("jobs_table").update({"active": not is_active}).eq("id", target_id).execute()
                                 st.rerun()
                             
-                            # ROW 2: EDIT | EXPORT | DELETE
                             b_edit, b_exp, b_del = st.columns(3)
                             
                             with b_edit:
@@ -578,15 +593,16 @@ def run_mro_app():
                                     st.rerun()
                             
                             with b_exp:
-                                # EXPORT BUTTON LOGIC
-                                # We use a "Prep" button to avoid lag on load.
-                                if st.button("⚡", key=f"prepexp_{target_id}", help="Prepare Export"):
-                                    with st.spinner("Generating..."):
+                                if st.button("⚡", key=f"prepexp_{target_id}"):
+                                    with st.spinner("..."):
+                                        # Use DF_RAW (Global) + Job Config
                                         file_data, mime, ext = generate_report_file(df_raw, job)
                                         if file_data:
                                             st.download_button("⬇️", data=file_data, file_name=f"{job['task_name']}{ext}", mime=mime, key=f"dl_{target_id}")
-                                        else: st.error("Error")
-                                    
+                                        else: 
+                                            # If error, mime returns the error string
+                                            st.error(f"Error: {mime}")
+
                             with b_del:
                                 with st.popover("🗑️", disabled=is_active):
                                     st.write("Sure?")
@@ -594,6 +610,11 @@ def run_mro_app():
                                         supabase.table("jobs_table").delete().eq("id", target_id).execute()
                                         st.rerun()
                         st.divider()
+                
+                # Cleanup flash state after render if needed (optional)
+                if st.session_state.get('last_updated_id'):
+                     # Keeping it for visual feedback, will be cleared on next meaningful action
+                     pass
 
     # --- VIEW 3: FOLDERS ---
     elif st.session_state['current_view'] == "Folders":
@@ -660,12 +681,12 @@ def run_mro_app():
                                 st.rerun()
                         
                         with c3:
-                            # EXPORT BUTTON FOLDERS
                             if st.button("⚡", key=f"fold_exp_{jid}", help="Prepare Export"):
                                 with st.spinner("..."):
                                     file_data, mime, ext = generate_report_file(df_raw, j)
                                     if file_data:
                                         st.download_button("⬇️", data=file_data, file_name=f"{j['task_name']}{ext}", mime=mime, key=f"fold_dl_{jid}")
+                                    else: st.error("Error")
 
         if not search_query or "no folder" in search_query.lower():
             orphans = [j for j in all_jobs if not j.get('folder_id') or j.get('folder_id') == 0]
