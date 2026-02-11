@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta, time
 import hashlib
 import io
+import time as pytime # Renamed to avoid conflict with datetime.time
 from supabase import create_client, Client
 
 # --- 1. CONFIGURATION & SUPABASE CONNECTION ---
@@ -17,34 +18,46 @@ except Exception as e:
     st.error("❌ Supabase connection error. Check your 'Secrets' in Streamlit Cloud.")
     st.stop()
 
-# --- CSS (DESIGN, ANIMATIONS & STICKY) ---
+# --- CSS (DESIGN, ANIMATIONS 3S & STICKY) ---
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem;}
     
-    /* CARTES */
+    /* CARTES STANDARD */
     .job-card {
         padding: 10px 14px; 
         border-radius: 8px; 
         margin-bottom: 8px; 
         background-color: rgba(255, 255, 255, 0.05) !important; 
-        border: 2px solid #FFCC80; 
+        border-left: 5px solid #FFCC80; /* Trait Orange (Inactif) */
+        border-top: 1px solid rgba(255,255,255,0.1);
+        border-right: 1px solid rgba(255,255,255,0.1);
+        border-bottom: 1px solid rgba(255,255,255,0.1);
         transition: all 0.2s ease;
     }
+    
+    /* CARTE ACTIVE */
     .job-card-active {
-        border: 2px solid #2ECC71 !important; 
+        padding: 10px 14px;
+        border-radius: 8px;
+        margin-bottom: 8px;
         background-color: rgba(46, 204, 113, 0.05) !important;
+        border-left: 5px solid #2ECC71; /* Trait Vert (Actif) */
+        border-top: 1px solid rgba(46, 204, 113, 0.2);
+        border-right: 1px solid rgba(46, 204, 113, 0.2);
+        border-bottom: 1px solid rgba(46, 204, 113, 0.2);
     }
     
-    /* ANIMATION CLIGNOTANTE (Ping) POUR L'ENREGISTREMENT */
-    @keyframes blink-border-anim {
-        0% { border-color: #3498DB; box-shadow: 0 0 5px #3498DB; }
-        50% { border-color: #fff; box-shadow: 0 0 15px #fff; }
-        100% { border-color: #3498DB; box-shadow: 0 0 5px #3498DB; }
+    /* ANIMATION FLASH (3 SECONDES) */
+    @keyframes flash-blue {
+        0% { border-left-color: #3498DB; background-color: rgba(52, 152, 219, 0.2); }
+        50% { border-left-color: #fff; background-color: rgba(52, 152, 219, 0.4); }
+        100% { border-left-color: #3498DB; background-color: rgba(255, 255, 255, 0.05); }
     }
-    .job-card-blink {
-        border: 2px solid #3498DB !important;
-        animation: blink-border-anim 1s infinite;
+    
+    .job-card-flash {
+        animation: flash-blue 1s ease-in-out 3; /* Joue 3 fois 1s = 3 secondes */
+        border-left: 5px solid #3498DB !important; /* Reste bleu après */
     }
 
     /* TEXTE & BOUTONS */
@@ -119,8 +132,7 @@ def add_job(job_data):
     try:
         job_data.pop('id', None) 
         res = supabase.table("jobs_table").insert(job_data).execute()
-        if res.data:
-            return res.data[0]['id'] # Return ID for blinking
+        if res.data: return res.data[0]['id']
         return True
     except: return False
 
@@ -165,28 +177,21 @@ def move_job_to_folder(job_id, folder_id):
     except: return False
 
 # =============================================================================
-# EXPORT ENGINE (FIXED)
+# EXPORT ENGINE
 # =============================================================================
 def generate_report_file(df_raw, job_config):
-    """Reconstructs the file using FULL source data + Filters."""
     try:
-        # Important: work on a copy to not impact the cache
         df = df_raw.copy()
-        
-        # Load config
         filters = job_config.get('filters_config', {})
-        if filters is None: filters = {} # Security
+        if filters is None: filters = {}
         
-        # 1. Master Filters (Dynamic columns)
+        # 1. Master Filters
         for col, selected_vals in filters.items():
-            # Skip reserved keys and check if column still exists in current source file
             if col not in ["retention_days", "date_column", "display_columns", "custom_code"] and col in df.columns:
                 if isinstance(selected_vals, list):
-                    if selected_vals: # Only filter if list is not empty
-                        df = df[df[col].astype(str).isin(selected_vals)]
+                    if selected_vals: df = df[df[col].astype(str).isin(selected_vals)]
                 else:
-                    if selected_vals and selected_vals != "ALL":
-                        df = df[df[col].astype(str) == selected_vals]
+                    if selected_vals and selected_vals != "ALL": df = df[df[col].astype(str) == selected_vals]
 
         # 2. Date Filter
         days = filters.get("retention_days", 0)
@@ -198,16 +203,15 @@ def generate_report_file(df_raw, job_config):
         code = filters.get("custom_code")
         if code:
             try: df = df.query(code)
-            except: pass # Ignore if code fails
+            except: pass
             
         # 4. Columns Selection
         cols = filters.get("display_columns")
         if cols:
-            # Only keep columns that still exist in the new file
             valid_cols = [c for c in cols if c in df.columns]
             if valid_cols: df = df[valid_cols]
 
-        # 5. Export to Buffer
+        # 5. Export
         fmt = job_config.get('format', 'Excel (.xlsx)')
         output = io.BytesIO()
         
@@ -216,7 +220,6 @@ def generate_report_file(df_raw, job_config):
             mime = "text/csv"
             ext = ".csv"
         else:
-            # Engine xlsxwriter is required
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Report')
             mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -225,7 +228,6 @@ def generate_report_file(df_raw, job_config):
         output.seek(0)
         return output, mime, ext
     except Exception as e:
-        # Return the error as a string to display it
         return None, str(e), None
 
 # =============================================================================
@@ -268,14 +270,18 @@ def run_mro_app():
     if 'current_view' not in st.session_state:
         st.session_state['current_view'] = "Visualization"
 
-    # State for Blinking Effect (ID of the modified job)
+    # State for Blinking Effect (ID and Timestamp to handle timeout)
     if 'last_updated_id' not in st.session_state:
         st.session_state['last_updated_id'] = None
+    if 'last_updated_time' not in st.session_state:
+        st.session_state['last_updated_time'] = 0
 
     # --- PERSISTENCE STATE INIT (FOR VISUALIZATION) ---
     if 'visu_saved_master_cols' not in st.session_state: st.session_state['visu_saved_master_cols'] = []
     if 'visu_saved_period' not in st.session_state: st.session_state['visu_saved_period'] = "View All"
     if 'visu_saved_custom_code' not in st.session_state: st.session_state['visu_saved_custom_code'] = ""
+    # We also need to persist individual filter selections
+    if 'visu_saved_filters_values' not in st.session_state: st.session_state['visu_saved_filters_values'] = {}
     
     # --- SIDEBAR ---
     with st.sidebar:
@@ -358,10 +364,13 @@ def run_mro_app():
         def reset_all_filters():
             for key in list(st.session_state.keys()):
                 if key.startswith("dyn_"): del st.session_state[key]
+            # Reset all saved states
             st.session_state['visu_saved_master_cols'] = []
             st.session_state['visu_saved_period'] = "View All"
             st.session_state['visu_saved_custom_code'] = ""
             st.session_state['visu_saved_display_cols'] = list(df_raw.columns)
+            st.session_state['visu_saved_filters_values'] = {} # Clear value persistence
+            
             if "master_cols_select" in st.session_state: del st.session_state["master_cols_select"]
             if "visu_columns_select" in st.session_state: del st.session_state["visu_columns_select"]
             if "visu_custom_code" in st.session_state: del st.session_state["visu_custom_code"]
@@ -371,20 +380,34 @@ def run_mro_app():
         with col_title: st.markdown("##### 🔍 Master Filters")
         with col_reset: st.button("🔄 Reset Filters", on_click=reset_all_filters, use_container_width=True)
 
-        # --- FIX SYNCHRO ---
         df_final = df_raw.copy()
         current_filters_config = {}
 
+        # --- DYNAMIC FILTERS WITH PERSISTENCE ---
         if master_filter_cols:
             filt_cols = st.columns(len(master_filter_cols))
             for i, col_name in enumerate(master_filter_cols):
                 val_counts = df_final[col_name].astype(str).value_counts()
                 display_options = [f"{val} ({count})" for val, count in val_counts.items()]
                 
-                # Check session state explicitly to force sync
-                default_vals = st.session_state.get(f"dyn_{col_name}", [])
+                # Check for saved value in our custom dictionary
+                saved_defaults = st.session_state['visu_saved_filters_values'].get(col_name, [])
                 
-                selected_display = filt_cols[i].multiselect(f"{col_name}", display_options, key=f"dyn_{col_name}", default=default_vals)
+                # Filter out defaults that might no longer exist in data options to avoid errors
+                # (Need to map saved defaults back to "Value (Count)" format or just use clean values logic)
+                # Strategy: We saved Display Options or Clean Values? Let's save Display Options for UI consistency.
+                
+                valid_defaults = [opt for opt in saved_defaults if opt in display_options]
+                
+                selected_display = filt_cols[i].multiselect(
+                    f"{col_name}", 
+                    display_options, 
+                    key=f"dyn_{col_name}",
+                    default=valid_defaults
+                )
+                
+                # Update saved state immediately
+                st.session_state['visu_saved_filters_values'][col_name] = selected_display
                 
                 if selected_display:
                     selected_clean = [s.rpartition(' (')[0] for s in selected_display]
@@ -419,7 +442,7 @@ def run_mro_app():
         with c_kpi: st.metric("Displayed Rows", len(df_final), delta=f"out of {len(df_raw)} total")
         st.dataframe(df_final, column_order=displayed_columns, use_container_width=True, height=500, hide_index=True)
         
-        # SAVE STATE
+        # SAVE CONFIGURATION STATES
         st.session_state['visu_saved_master_cols'] = master_filter_cols
         st.session_state['visu_saved_display_cols'] = displayed_columns
         st.session_state['visu_saved_custom_code'] = custom_query
@@ -529,11 +552,13 @@ def run_mro_app():
                                     st.success("Saved!")
                                     st.session_state['form_filters'] = {}
                                     st.session_state['last_updated_id'] = new_id
+                                    st.session_state['last_updated_time'] = pytime.time()
                                     st.rerun()
                             else:
                                 if update_job(st.session_state['edit_job_id'], job_payload):
                                     st.success("Updated!")
                                     st.session_state['last_updated_id'] = st.session_state['edit_job_id']
+                                    st.session_state['last_updated_time'] = pytime.time()
                                     st.session_state['edit_mode'] = False
                                     st.session_state['edit_job_id'] = None
                                     st.session_state['form_filters'] = {}
@@ -558,12 +583,17 @@ def run_mro_app():
                     target_id = int(job['id'])
                     is_active = job['active']
                     
-                    # Logic for Blinking class
+                    # --- FLASH LOGIC (3 Seconds) ---
                     card_class = "job-card-active" if is_active else "job-card"
+                    
                     if st.session_state.get('last_updated_id') == target_id:
-                         card_class += " job-card-blink"
-                         # Optionally remove it for next run, but streamit reruns will clear it eventually if we wanted
-                         # Here it keeps blinking until another action.
+                        # Check time
+                        if pytime.time() - st.session_state.get('last_updated_time', 0) < 3:
+                            card_class += " job-card-flash"
+                        else:
+                            # Cleanup id to stop checking
+                            # We can't clear session state in loop easily without rerun, so we let it fade naturally via time check
+                            pass
 
                     icon_status = "🟢" if is_active else "🟠"
                     folder_label = folder_options.get(job.get('folder_id', 0) or 0, "No Folder")
@@ -593,15 +623,13 @@ def run_mro_app():
                                     st.rerun()
                             
                             with b_exp:
-                                if st.button("⚡", key=f"prepexp_{target_id}"):
+                                if st.button("⚡", key=f"prepexp_{target_id}", help="Export Report"):
                                     with st.spinner("..."):
-                                        # Use DF_RAW (Global) + Job Config
                                         file_data, mime, ext = generate_report_file(df_raw, job)
                                         if file_data:
                                             st.download_button("⬇️", data=file_data, file_name=f"{job['task_name']}{ext}", mime=mime, key=f"dl_{target_id}")
                                         else: 
-                                            # If error, mime returns the error string
-                                            st.error(f"Error: {mime}")
+                                            st.error(f"Err: {mime}")
 
                             with b_del:
                                 with st.popover("🗑️", disabled=is_active):
@@ -610,11 +638,6 @@ def run_mro_app():
                                         supabase.table("jobs_table").delete().eq("id", target_id).execute()
                                         st.rerun()
                         st.divider()
-                
-                # Cleanup flash state after render if needed (optional)
-                if st.session_state.get('last_updated_id'):
-                     # Keeping it for visual feedback, will be cleared on next meaningful action
-                     pass
 
     # --- VIEW 3: FOLDERS ---
     elif st.session_state['current_view'] == "Folders":
@@ -681,7 +704,7 @@ def run_mro_app():
                                 st.rerun()
                         
                         with c3:
-                            if st.button("⚡", key=f"fold_exp_{jid}", help="Prepare Export"):
+                            if st.button("⚡", key=f"fold_exp_{jid}", help="Export"):
                                 with st.spinner("..."):
                                     file_data, mime, ext = generate_report_file(df_raw, j)
                                     if file_data:
