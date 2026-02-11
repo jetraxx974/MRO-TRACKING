@@ -116,32 +116,28 @@ def login_user(email, password):
     except: pass
     return None
 
-# --- ACCESS CONTROL HELPERS (CORRIGÉ) ---
+# --- ACCESS CONTROL HELPERS (VERSION CORRIGÉE ET SIMPLIFIÉE) ---
 def grant_viewer_access(viewer_email, folder_key):
-    """Links a viewer to a folder securely."""
-    # 1. NETTOYAGE : On enlève les espaces avant et après la clé collée
-    clean_key = folder_key.strip()
-    
+    """Links a viewer to a folder securely using a single SQL Transaction."""
     try:
-        # 2. VERIFICATION VIA RPC (Fonction sécurisée SQL)
-        # On n'interroge plus la table directement, on passe par la fonction admin
-        folder_res = supabase.rpc("verify_folder_key", {"input_key": clean_key}).execute()
+        # On appelle notre nouvelle Super-Fonction SQL
+        # Elle gère la vérification ET l'insertion d'un coup.
+        response = supabase.rpc("unlock_folder_securely", {
+            "p_email": viewer_email, 
+            "p_key": folder_key
+        }).execute()
         
-        if not folder_res.data:
+        folder_name = response.data
+        
+        # Si la fonction renvoie quelque chose (le nom du dossier), c'est gagné
+        if folder_name:
+            return True, f"Unlocked access to '{folder_name}'"
+        else:
+            # Si elle renvoie None, la clé est mauvaise
             return False, "Invalid Key"
-        
-        folder_id = folder_res.data[0]['id']
-        folder_name = folder_res.data[0]['name']
-        
-        # 3. ATTRIBUTION DE L'ACCÈS
-        data = {"viewer_email": viewer_email, "folder_id": folder_id}
-        supabase.table("viewer_access").insert(data).execute()
-        return True, folder_name
 
     except Exception as e:
-        # Gestion des doublons (si déjà accès)
-        if "duplicate" in str(e) or "unique" in str(e):
-             return True, "Already Accessed"
+        # En cas de gros crash technique
         return False, str(e)
 def get_viewer_folders(viewer_email):
     """Get folders unlocked by this viewer"""
