@@ -116,25 +116,33 @@ def login_user(email, password):
     except: pass
     return None
 
-# --- ACCESS CONTROL HELPERS ---
+# --- ACCESS CONTROL HELPERS (CORRIGÉ) ---
 def grant_viewer_access(viewer_email, folder_key):
-    """Links a viewer to a folder if the key matches."""
+    """Links a viewer to a folder securely."""
+    # 1. NETTOYAGE : On enlève les espaces avant et après la clé collée
+    clean_key = folder_key.strip()
+    
     try:
-        folder_res = supabase.table("folders_table").select("id, name").eq("access_key", folder_key).execute()
+        # 2. VERIFICATION VIA RPC (Fonction sécurisée SQL)
+        # On n'interroge plus la table directement, on passe par la fonction admin
+        folder_res = supabase.rpc("verify_folder_key", {"input_key": clean_key}).execute()
+        
         if not folder_res.data:
             return False, "Invalid Key"
         
         folder_id = folder_res.data[0]['id']
         folder_name = folder_res.data[0]['name']
         
+        # 3. ATTRIBUTION DE L'ACCÈS
         data = {"viewer_email": viewer_email, "folder_id": folder_id}
         supabase.table("viewer_access").insert(data).execute()
         return True, folder_name
+
     except Exception as e:
+        # Gestion des doublons (si déjà accès)
         if "duplicate" in str(e) or "unique" in str(e):
              return True, "Already Accessed"
         return False, str(e)
-
 def get_viewer_folders(viewer_email):
     """Get folders unlocked by this viewer"""
     try:
