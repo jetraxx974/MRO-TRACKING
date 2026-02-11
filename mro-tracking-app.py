@@ -735,6 +735,7 @@ def run_mro_app():
                         else: st.error("Error processing this report configuration.")
                 else: st.error("Data source unavailable.")
 
+
 # =============================================================================
 # ENTRY POINT
 # =============================================================================
@@ -763,13 +764,23 @@ def main():
                         else: st.error("Authentication failed.")
             else:
                 with st.form("signup"):
-                    fn = st.text_input("First Name"); ln = st.text_input("Last Name"); cp = st.text_input("Company")
-                    em = st.text_input("Work Email"); pw = st.text_input("Password", type='password')
-                    role_choice = st.selectbox("I am a...", ["Client (Viewer)", "Professional (User)"])
-                    role_db = "viewer" if "Client" in role_choice else "user"
+                    st.write("Create a new account")
+                    fn = st.text_input("First Name")
+                    ln = st.text_input("Last Name")
+                    cp = st.text_input("Company")
+                    em = st.text_input("Work Email")
+                    pw = st.text_input("Password", type='password')
+                    
+                    # PLUS DE CHOIX DE RÔLE ICI
+                    
                     if st.form_submit_button("Create Account"):
                         if em and pw:
-                            if save_user(em, pw, fn, ln, cp, role_db): st.success("Account created! Please log in.")
+                            # Par défaut, on inscrit tout le monde en 'viewer' (sécurité maximale)
+                            if save_user(em, pw, fn, ln, cp, 'viewer'): 
+                                st.success("Account created! Please log in.")
+                                st.info("Note: Your account has 'Viewer' access by default. Contact your administrator to upgrade your rights.")
+                        else:
+                            st.error("Please fill all fields.")
     else:
         run_mro_app()
 
